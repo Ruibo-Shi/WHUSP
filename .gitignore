@@ -15,3 +15,5 @@ os/virt.out
 tools/
 pushall.sh
 .vscode/*.log
+
+develop-guide/
