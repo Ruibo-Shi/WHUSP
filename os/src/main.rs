@@ -32,6 +32,7 @@ mod trap;
 
 use crate::drivers::chardev::CharDevice;
 use crate::drivers::chardev::UART;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 core::arch::global_asm!(include_str!("entry.asm"));
 
@@ -49,15 +50,21 @@ fn clear_bss() {
 use lazy_static::*;
 use sync::UPIntrFreeCell;
 
+static BOOT_HART_ID: AtomicUsize = AtomicUsize::new(0);
+static DTB_ADDR: AtomicUsize = AtomicUsize::new(0);
+
 lazy_static! {
     pub static ref DEV_NON_BLOCKING_ACCESS: UPIntrFreeCell<bool> =
         unsafe { UPIntrFreeCell::new(false) };
 }
 
 #[unsafe(no_mangle)]
-pub fn rust_main() -> ! {
+pub fn rust_main(hart_id: usize, dtb_addr: usize) -> ! {
     clear_bss();
+    BOOT_HART_ID.store(hart_id, Ordering::Relaxed);
+    DTB_ADDR.store(dtb_addr, Ordering::Relaxed);
     logging::init();
+    info!("boot hart_id={}, dtb_addr={:#x}", hart_id, dtb_addr);
     mm::init();
     UART.init();
     info!("KERN: init gpu");
@@ -70,7 +77,7 @@ pub fn rust_main() -> ! {
     trap::init();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
-    board::device_init();
+    board::device_init(hart_id);
     fs::list_apps();
     task::add_initproc();
     *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;

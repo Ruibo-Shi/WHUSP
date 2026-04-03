@@ -18,15 +18,16 @@ pub const VIRTGPU_XRES: u32 = 1280;
 #[allow(unused)]
 pub const VIRTGPU_YRES: u32 = 800;
 
+use crate::BOOT_HART_ID;
 use crate::drivers::block::BLOCK_DEVICE;
 use crate::drivers::chardev::{CharDevice, UART};
 use crate::drivers::plic::{IntrTargetPriority, PLIC};
 use crate::drivers::{KEYBOARD_DEVICE, MOUSE_DEVICE};
+use core::sync::atomic::Ordering;
 
-pub fn device_init() {
+pub fn device_init(hart_id: usize) {
     use riscv::register::sie;
     let mut plic = unsafe { PLIC::new(VIRT_PLIC) };
-    let hart_id: usize = 0;
     let supervisor = IntrTargetPriority::Supervisor;
     let machine = IntrTargetPriority::Machine;
     plic.set_threshold(hart_id, supervisor, 0);
@@ -43,7 +44,8 @@ pub fn device_init() {
 
 pub fn irq_handler() {
     let mut plic = unsafe { PLIC::new(VIRT_PLIC) };
-    let intr_src_id = plic.claim(0, IntrTargetPriority::Supervisor);
+    let hart_id = BOOT_HART_ID.load(Ordering::Relaxed);
+    let intr_src_id = plic.claim(hart_id, IntrTargetPriority::Supervisor);
     match intr_src_id {
         5 => KEYBOARD_DEVICE.handle_irq(),
         6 => MOUSE_DEVICE.handle_irq(),
@@ -51,5 +53,5 @@ pub fn irq_handler() {
         10 => UART.handle_irq(),
         _ => panic!("unsupported IRQ {}", intr_src_id),
     }
-    plic.complete(0, IntrTargetPriority::Supervisor, intr_src_id);
+    plic.complete(hart_id, IntrTargetPriority::Supervisor, intr_src_id);
 }

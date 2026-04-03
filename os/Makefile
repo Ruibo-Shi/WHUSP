@@ -9,8 +9,6 @@ APPS := ../user/src/bin/*
 
 # BOARD
 BOARD := qemu
-SBI ?= rustsbi
-BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
 
 # GUI
 GUI ?= off
@@ -72,12 +70,15 @@ disasm-vim: kernel
 	@rm $(DISASM_TMP)
 
 run: run-inner
-
+#qemu-system-riscv64 -machine virt -kernel {os_file} -m {mem} -nographic -smp {smp} -bios default -drive file={fs},if=none,format=raw,id=x0 \
+                    -device virtio-blk-device, drive=x0,bus=virtio-mmio-bus.0 -no-reboot -device virtio-net-device,netdev=net -netdev user,id=net \
+                    -rtc base=utc \
+                    -drive file=disk.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
 QEMU_ARGS := -machine virt \
-			 -bios $(BOOTLOADER) \
+			 -bios default \
 			 -serial stdio \
 			 $(GUI_OPTION) \
-			 -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
+			 -device loader,file=$(KERNEL_ELF) \
 			 -drive file=$(FS_IMG),if=none,format=raw,id=x0 \
 			 -device virtio-blk-device,drive=x0 \
 			 -device virtio-gpu-device \
