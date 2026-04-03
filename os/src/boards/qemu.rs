@@ -7,11 +7,13 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use fdt::{Fdt, node::FdtNode};
 use riscv::register::sie;
-use virtio_drivers::{DeviceType, VirtIOHeader};
 
 const MMIO_REGION_CAPACITY: usize = 7;
+const NET_IRQ: usize = 4;
 const KEYBOARD_IRQ: usize = 5;
 const MOUSE_IRQ: usize = 6;
+const GPU_IRQ: usize = 7;
+const BLOCK_IRQ: usize = 8;
 const EARLY_UART_BASE: usize = 0x1000_0000;
 
 pub type BlockDeviceImpl = crate::drivers::block::VirtIOBlock;
@@ -192,16 +194,6 @@ fn push_device_mmio_region(config: &mut BoardConfig, device: IrqDevice) {
     );
 }
 
-fn virtio_device_type(device: IrqDevice) -> DeviceType {
-    let header = unsafe { &*(device.base as *const VirtIOHeader) };
-    assert!(
-        header.verify(),
-        "virtio-mmio device at {:#x} has an invalid header",
-        device.base
-    );
-    header.device_type()
-}
-
 unsafe extern "C" {
     safe fn ekernel();
 }
@@ -269,32 +261,24 @@ pub fn init_from_dtb(dtb_addr: usize) {
             continue;
         }
         let device = irq_device(node, "virtio-mmio");
-        match virtio_device_type(device) {
-            DeviceType::Block => {
-                if config.block.base == 0 {
-                    set_required_device(&mut config.block, device, "virtio block");
-                    push_device_mmio_region(&mut config, device);
-                }
+        match device.irq {
+            BLOCK_IRQ => {
+                set_required_device(&mut config.block, device, "virtio block");
+                push_device_mmio_region(&mut config, device);
             }
-            DeviceType::GPU => {
+            GPU_IRQ => {
                 set_required_device(&mut config.gpu, device, "virtio gpu");
                 push_device_mmio_region(&mut config, device);
             }
-            // The MMIO header only tells us that this is a virtio-input device.
-            // Keep the existing IRQ split to decide which input transport is the
-            // keyboard and which one is the mouse.
-            DeviceType::Input => match device.irq {
-                KEYBOARD_IRQ => {
-                    set_required_device(&mut config.keyboard, device, "virtio keyboard");
-                    push_device_mmio_region(&mut config, device);
-                }
-                MOUSE_IRQ => {
-                    set_required_device(&mut config.mouse, device, "virtio mouse");
-                    push_device_mmio_region(&mut config, device);
-                }
-                _ => panic!("unsupported virtio input IRQ {}", device.irq),
+            KEYBOARD_IRQ => {
+                set_required_device(&mut config.keyboard, device, "virtio keyboard");
+                push_device_mmio_region(&mut config, device);
             }
-            DeviceType::Network => {
+            MOUSE_IRQ => {
+                set_required_device(&mut config.mouse, device, "virtio mouse");
+                push_device_mmio_region(&mut config, device);
+            }
+            NET_IRQ => {
                 assert!(config.net.is_none(), "duplicate virtio net device in DTB");
                 config.net = Some(device);
                 push_device_mmio_region(&mut config, device);
