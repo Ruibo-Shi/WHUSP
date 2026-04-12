@@ -12,6 +12,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 
+// TODO: to understand😄
 pub struct ProcessControlBlock {
     // immutable
     pub pid: PidHandle,

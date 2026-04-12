@@ -278,6 +278,8 @@ impl MapArea {
             map_perm: another.map_perm,
         }
     }
+
+    // TODO: maybe we need to choose only one way to do it?
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         let ppn: PhysPageNum;
         match self.map_type {
@@ -321,6 +323,7 @@ impl MapArea {
         let mut start: usize = 0;
         let mut current_vpn = self.vpn_range.get_start();
         let len = data.len();
+        // TODO: this loop could be refactor for better clarity
         loop {
             let src = &data[start..len.min(start + PAGE_SIZE)];
             let dst = &mut page_table

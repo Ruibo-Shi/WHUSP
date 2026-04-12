@@ -180,7 +180,7 @@ fn push_mmio_region(config: &mut BoardConfig, range: MmioRange) {
 }
 
 fn set_required_device(slot: &mut IrqDevice, value: IrqDevice, context: &str) {
-    assert_eq!(slot.base, 0, "duplicate {} device in DTB", context);
+    assert_eq!(slot.base, 0, "duplicate {context} device in DTB");
     *slot = value;
 }
 

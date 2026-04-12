@@ -93,6 +93,7 @@ impl FrameAllocator for StackFrameAllocator {
 
 type FrameAllocatorImpl = StackFrameAllocator;
 
+// TODO: Could use core::sync::LazyLock try to replace it
 lazy_static! {
     pub static ref FRAME_ALLOCATOR: UPIntrFreeCell<FrameAllocatorImpl> =
         unsafe { UPIntrFreeCell::new(FrameAllocatorImpl::new()) };
