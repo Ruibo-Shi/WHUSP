@@ -12,7 +12,8 @@ pub trait GpuDevice: Send + Sync + Any {
 }
 
 lazy_static::lazy_static!(
-    pub static ref GPU_DEVICE: Arc<dyn GpuDevice> = Arc::new(VirtIOGpuWrapper::new());
+    pub static ref GPU_DEVICE: Option<Arc<dyn GpuDevice>> = crate::board::gpu_base()
+        .map(|_| Arc::new(VirtIOGpuWrapper::new()) as Arc<dyn GpuDevice>);
 );
 
 pub struct VirtIOGpuWrapper {
@@ -22,7 +23,7 @@ pub struct VirtIOGpuWrapper {
 static BMP_DATA: &[u8] = include_bytes!("../../assert/mouse.bmp");
 impl VirtIOGpuWrapper {
     pub fn new() -> Self {
-        let base_addr = crate::board::gpu_base();
+        let base_addr = crate::board::gpu_base().expect("GPU device is unavailable");
         unsafe {
             let mut virtio =
                 VirtIOGpu::<VirtioHal>::new(&mut *(base_addr as *mut VirtIOHeader)).unwrap();

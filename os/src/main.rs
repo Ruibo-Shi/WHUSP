@@ -2,7 +2,6 @@
 #![no_main]
 #![feature(alloc_error_handler)]
 
-//use crate::drivers::{GPU_DEVICE, KEYBOARD_DEVICE, MOUSE_DEVICE, INPUT_CONDVAR};
 use crate::drivers::{GPU_DEVICE, KEYBOARD_DEVICE, MOUSE_DEVICE};
 extern crate alloc;
 
@@ -75,12 +74,21 @@ pub extern "C" fn rust_main(hart_id: usize, dtb_addr: usize) -> ! {
         board::uart_base(),
         board::plic_base(),
     );
-    info!("KERN: init gpu");
-    let _gpu = GPU_DEVICE.clone();
-    info!("KERN: init keyboard");
-    let _keyboard = KEYBOARD_DEVICE.clone();
-    info!("KERN: init mouse");
-    let _mouse = MOUSE_DEVICE.clone();
+    if let Some(_gpu) = GPU_DEVICE.as_ref() {
+        info!("KERN: init gpu");
+    } else {
+        info!("KERN: gpu device unavailable");
+    }
+    if let Some(_keyboard) = KEYBOARD_DEVICE.as_ref() {
+        info!("KERN: init keyboard");
+    } else {
+        info!("KERN: keyboard device unavailable");
+    }
+    if let Some(_mouse) = MOUSE_DEVICE.as_ref() {
+        info!("KERN: init mouse");
+    } else {
+        info!("KERN: mouse device unavailable");
+    }
     info!("KERN: init trap");
     trap::init();
     trap::enable_timer_interrupt();

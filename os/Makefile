@@ -53,8 +53,12 @@ else
 QEMU_CONSOLE_ARGS := -serial stdio
 endif
 
-QEMU_PRIMARY_DISK_ARGS = \
+QEMU_TEST_PRIMARY_DISK_ARGS = \
 	-drive file=$(TEST_DISK),if=none,format=raw,id=x0 \
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+
+QEMU_DEV_PRIMARY_DISK_ARGS = \
+	-drive file=$(FS_IMG),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 ifneq ($(strip $(AUX_DISK)),)
@@ -63,25 +67,37 @@ QEMU_AUX_DISK_ARGS = \
 	-device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
 endif
 
-# The current kernel still initializes GPU/keyboard/mouse during boot,
-# so local QEMU runs keep those devices attached even though the official
-# contest command only requires block + net.
-QEMU_ARGS = \
+QEMU_COMMON_ARGS = \
 	-machine virt \
 	-m $(MEM) \
 	$(QEMU_CONSOLE_ARGS) \
 	-smp $(SMP) \
 	-bios $(BIOS) \
 	-kernel $(KERNEL_ELF) \
-	$(QEMU_PRIMARY_DISK_ARGS) \
 	$(QEMU_AUX_DISK_ARGS) \
 	-no-reboot \
+	-rtc base=$(RTC_BASE)
+
+QEMU_CONTEST_NET_ARGS = \
+	-device virtio-net-device,netdev=net \
+	-netdev user,id=net
+
+QEMU_DEV_NET_ARGS = \
+	-device virtio-net-device,netdev=net0 \
+	-netdev user,id=net0,hostfwd=udp::$(HOSTFWD_UDP)-:$(GUEST_UDP),hostfwd=tcp::$(HOSTFWD_TCP)-:$(GUEST_TCP)
+
+QEMU_CONTEST_ARGS = \
+	$(QEMU_TEST_PRIMARY_DISK_ARGS) \
+	$(QEMU_CONTEST_NET_ARGS) \
+	$(QEMU_COMMON_ARGS)
+
+QEMU_DEV_ARGS = \
+	$(QEMU_DEV_PRIMARY_DISK_ARGS) \
+	$(QEMU_DEV_NET_ARGS) \
+	$(QEMU_COMMON_ARGS) \
 	-device virtio-gpu-device \
 	-device virtio-keyboard-device \
-	-device virtio-mouse-device \
-	-device virtio-net-device,netdev=net0 \
-	-netdev user,id=net0,hostfwd=udp::$(HOSTFWD_UDP)-:$(GUEST_UDP),hostfwd=tcp::$(HOSTFWD_TCP)-:$(GUEST_TCP) \
-	-rtc base=$(RTC_BASE)
+	-device virtio-mouse-device
 
 # Tooling
 OBJDUMP := rust-objdump --arch-name=$(OBJDUMP_ARCH)
@@ -98,7 +114,7 @@ env:
 
 kernel: env $(KERNEL_ELF)
 
-$(KERNEL_ELF):
+$(KERNEL_ELF): FORCE
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
 	@cargo build $(MODE_ARG)
@@ -136,10 +152,14 @@ run: qemu-version-check kernel
 		echo "AUX_DISK does not exist: $(AUX_DISK)"; \
 		exit 1; \
 	fi
-	@$(QEMU) $(QEMU_ARGS)
+	@$(QEMU) $(QEMU_CONTEST_ARGS)
 
 run-dev: qemu-version-check build
-	@$(MAKE) --no-print-directory run TEST_DISK=$(FS_IMG) AUX_DISK="$(AUX_DISK)"
+	@if [ -n "$(AUX_DISK)" ] && [ ! -f "$(AUX_DISK)" ]; then \
+		echo "AUX_DISK does not exist: $(AUX_DISK)"; \
+		exit 1; \
+	fi
+	@$(QEMU) $(QEMU_DEV_ARGS)
 
 fdt:
 	@$(QEMU) -machine virt,dumpdtb=virt.out -m 128m
@@ -162,7 +182,7 @@ debug: qemu-version-check kernel
 		exit 1; \
 	fi
 	@tmux new-session -d \
-		"$(QEMU) $(QEMU_ARGS) -s -S" && \
+		"$(QEMU) $(QEMU_CONTEST_ARGS) -s -S" && \
 		tmux split-window -h "$(GDB) -ex 'file $(KERNEL_ELF)' -ex 'set arch $(GDB_ARCH)' -ex 'target remote localhost:1234'" && \
 		tmux -2 attach-session -d
 
@@ -179,7 +199,7 @@ gdbserver: qemu-version-check kernel
 		echo "AUX_DISK does not exist: $(AUX_DISK)"; \
 		exit 1; \
 	fi
-	@$(QEMU) $(QEMU_ARGS) -s -S
+	@$(QEMU) $(QEMU_CONTEST_ARGS) -s -S
 
 gdbclient:
 	@$(GDB) -ex 'file $(KERNEL_ELF)' -ex 'set arch $(GDB_ARCH)' -ex 'target remote localhost:1234'
@@ -195,4 +215,6 @@ disasm-vim: kernel
 	@nvim $(DISASM_TMP)
 	@rm $(DISASM_TMP)
 
-.PHONY: build env kernel clean disasm disasm-vim fs-img run run-dev debug gdbserver gdbclient fdt qemu-version-check
+FORCE:
+
+.PHONY: build env kernel clean disasm disasm-vim fs-img run run-dev debug gdbserver gdbclient fdt qemu-version-check FORCE

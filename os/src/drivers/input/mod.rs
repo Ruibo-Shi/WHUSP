@@ -23,10 +23,10 @@ pub trait InputDevice: Send + Sync + Any {
 }
 
 lazy_static::lazy_static!(
-    pub static ref KEYBOARD_DEVICE: Arc<dyn InputDevice> =
-        Arc::new(VirtIOInputWrapper::new(crate::board::keyboard_base()));
-    pub static ref MOUSE_DEVICE: Arc<dyn InputDevice> =
-        Arc::new(VirtIOInputWrapper::new(crate::board::mouse_base()));
+    pub static ref KEYBOARD_DEVICE: Option<Arc<dyn InputDevice>> = crate::board::keyboard_base()
+        .map(|addr| Arc::new(VirtIOInputWrapper::new(addr)) as Arc<dyn InputDevice>);
+    pub static ref MOUSE_DEVICE: Option<Arc<dyn InputDevice>> = crate::board::mouse_base()
+        .map(|addr| Arc::new(VirtIOInputWrapper::new(addr)) as Arc<dyn InputDevice>);
 );
 
 impl VirtIOInputWrapper {

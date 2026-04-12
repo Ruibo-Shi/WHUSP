@@ -5,7 +5,10 @@ use crate::task::current_process;
 const FB_VADDR: usize = 0x10000000;
 
 pub fn sys_framebuffer() -> isize {
-    let fb = GPU_DEVICE.get_framebuffer();
+    let Some(gpu) = GPU_DEVICE.as_ref() else {
+        return -1;
+    };
+    let fb = gpu.get_framebuffer();
     let len = fb.len();
     // println!("[kernel] FrameBuffer: addr 0x{:X}, len {}", fb.as_ptr() as usize , len);
     let fb_start_pa = PhysAddr::from(fb.as_ptr() as usize);
@@ -29,6 +32,9 @@ pub fn sys_framebuffer() -> isize {
 }
 
 pub fn sys_framebuffer_flush() -> isize {
-    GPU_DEVICE.flush();
+    let Some(gpu) = GPU_DEVICE.as_ref() else {
+        return -1;
+    };
+    gpu.flush();
     0
 }
