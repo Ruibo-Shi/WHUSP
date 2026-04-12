@@ -51,5 +51,7 @@
 - [ ] 建立 `basic` 用例到 syscall 的逐项对照表（可并行）
 - [ ] 对比 `RustOsWhu` / `NighthawkOS` 的提交路径并提炼可复用做法（可并行）
 - [ ] 评估 EXT4 方案的许可证、维护成本和提交打包方式（可并行）
+- [ ] 记录并跟踪 EXT4 phase 1 的 `huge_write` 性能回退（当前约 256KiB/s，对比旧 `easy-fs` 约 549KiB/s）
+- [ ] 分析 `huge_write` 在 EXT4 路径上的瓶颈（分配、flush、缓存、写入粒度）
+- [ ] 优化 EXT4 顺序写路径，让 `huge_write` 不再明显慢于旧 `easy-fs`
 - [ ] 给 LoongArch 提前保留根构建入口和最小验证脚本（可并行）
-

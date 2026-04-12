@@ -5,8 +5,66 @@ use crate::sync::UPIntrFreeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
-use easy_fs::{EasyFileSystem, Inode};
+use core::str;
+use core::time::Duration;
 use lazy_static::*;
+use lwext4_rust::ffi::{EIO, EXT4_ROOT_INO};
+use lwext4_rust::{
+    BlockDevice as Ext4BlockDevice, EXT4_DEV_BSIZE, Ext4Error, Ext4Filesystem, Ext4Result,
+    FsConfig, InodeType, SystemHal,
+};
+
+struct KernelHal;
+
+impl SystemHal for KernelHal {
+    fn now() -> Option<Duration> {
+        None
+    }
+}
+
+#[derive(Clone)]
+struct KernelDisk {
+    dev: Arc<crate::drivers::block::VirtIOBlock>,
+}
+
+impl Ext4BlockDevice for KernelDisk {
+    fn write_blocks(&mut self, block_id: u64, buf: &[u8]) -> Ext4Result<usize> {
+        let mut block_buf = [0u8; EXT4_DEV_BSIZE];
+        for (index, block) in buf.chunks(EXT4_DEV_BSIZE).enumerate() {
+            if block.len() != EXT4_DEV_BSIZE {
+                return Err(Ext4Error::new(EIO as _, "unaligned block write"));
+            }
+            block_buf.copy_from_slice(block);
+            self.dev.write_block(block_id as usize + index, &block_buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn read_blocks(&mut self, block_id: u64, buf: &mut [u8]) -> Ext4Result<usize> {
+        let mut block_buf = [0u8; EXT4_DEV_BSIZE];
+        for (index, block) in buf.chunks_mut(EXT4_DEV_BSIZE).enumerate() {
+            if block.len() != EXT4_DEV_BSIZE {
+                return Err(Ext4Error::new(EIO as _, "unaligned block read"));
+            }
+            self.dev.read_block(block_id as usize + index, &mut block_buf);
+            block.copy_from_slice(&block_buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn num_blocks(&self) -> Ext4Result<u64> {
+        Ok(self.dev.num_blocks())
+    }
+}
+
+type KernelExt4Fs = Ext4Filesystem<KernelHal, KernelDisk>;
+
+const EXT4_CONFIG: FsConfig = FsConfig { bcache_size: 256 };
+
+struct RootFs(KernelExt4Fs);
+
+unsafe impl Send for RootFs {}
+unsafe impl Sync for RootFs {}
 
 pub struct OSInode {
     readable: bool,
@@ -16,45 +74,84 @@ pub struct OSInode {
 
 pub struct OSInodeInner {
     offset: usize,
-    inode: Arc<Inode>,
+    ino: u32,
 }
 
 impl OSInode {
-    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+    pub fn new(readable: bool, writable: bool, ino: u32) -> Self {
         Self {
             readable,
             writable,
-            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset: 0, ino }) },
         }
     }
+
     pub fn read_all(&self) -> Vec<u8> {
         let mut inner = self.inner.exclusive_access();
         let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
+        let mut data = Vec::new();
         loop {
-            let len = inner.inode.read_at(inner.offset, &mut buffer);
+            let len = ROOT_FS.exclusive_session(|fs| {
+                fs.0.read_at(inner.ino, &mut buffer, inner.offset as u64)
+                    .expect("ext4 read_all failed")
+            });
             if len == 0 {
                 break;
             }
             inner.offset += len;
-            v.extend_from_slice(&buffer[..len]);
+            data.extend_from_slice(&buffer[..len]);
         }
-        v
+        data
     }
 }
 
 lazy_static! {
-    pub static ref ROOT_INODE: Arc<Inode> = {
-        let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
-        Arc::new(EasyFileSystem::root_inode(&efs))
+    static ref ROOT_FS: UPIntrFreeCell<RootFs> = unsafe {
+        UPIntrFreeCell::new(
+            RootFs(
+                KernelExt4Fs::new(
+                    KernelDisk {
+                        dev: BLOCK_DEVICE.clone(),
+                    },
+                    EXT4_CONFIG,
+                )
+                .expect("failed to mount ext4 root filesystem"),
+            ),
+        )
     };
+}
+
+fn normalized_root_name(path: &str) -> Option<&str> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() || path.contains('/') {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+fn root_lookup_ino(fs: &mut KernelExt4Fs, path: &str) -> Option<(u32, InodeType)> {
+    let name = normalized_root_name(path)?;
+    let mut result = fs.lookup(EXT4_ROOT_INO, name).ok()?;
+    let entry = result.entry();
+    Some((entry.ino(), entry.inode_type()))
 }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for app in ROOT_INODE.ls() {
-        println!("{}", app);
-    }
+    ROOT_FS.exclusive_session(|fs| {
+        let mut reader = fs
+            .0
+            .read_dir(EXT4_ROOT_INO, 0)
+            .expect("failed to iterate ext4 root directory");
+        while let Some(entry) = reader.current() {
+            let name = str::from_utf8(entry.name()).unwrap_or("<invalid>");
+            if name != "." && name != ".." {
+                println!("{}", name);
+            }
+            reader.step().expect("failed to advance ext4 dir iterator");
+        }
+    });
     println!("**************/")
 }
 
@@ -69,8 +166,7 @@ bitflags! {
 }
 
 impl OpenFlags {
-    /// Do not check validity for simplicity
-    /// Return (readable, writable)
+    /// Return (readable, writable).
     pub fn read_write(&self) -> (bool, bool) {
         if self.is_empty() {
             (true, false)
@@ -83,40 +179,53 @@ impl OpenFlags {
 }
 
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    let name = normalized_root_name(name)?;
     let (readable, writable) = flags.read_write();
-    if flags.contains(OpenFlags::CREATE) {
-        if let Some(inode) = ROOT_INODE.find(name) {
-            // clear size
-            inode.clear();
-            Some(Arc::new(OSInode::new(readable, writable, inode)))
-        } else {
-            // create file
-            ROOT_INODE
-                .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
-        }
-    } else {
-        ROOT_INODE.find(name).map(|inode| {
-            if flags.contains(OpenFlags::TRUNC) {
-                inode.clear();
+    let ino = ROOT_FS.exclusive_session(|fs| {
+        let fs = &mut fs.0;
+        if flags.contains(OpenFlags::CREATE) {
+            if let Some((ino, inode_type)) = root_lookup_ino(fs, name) {
+                if inode_type == InodeType::Directory {
+                    return None;
+                }
+                fs.set_len(ino, 0).ok()?;
+                Some(ino)
+            } else {
+                fs.create(EXT4_ROOT_INO, name, InodeType::RegularFile, 0o644)
+                    .ok()
             }
-            Arc::new(OSInode::new(readable, writable, inode))
-        })
-    }
+        } else {
+            let (ino, inode_type) = root_lookup_ino(fs, name)?;
+            if inode_type == InodeType::Directory {
+                return None;
+            }
+            if flags.contains(OpenFlags::TRUNC) {
+                fs.set_len(ino, 0).ok()?;
+            }
+            Some(ino)
+        }
+    })?;
+    Some(Arc::new(OSInode::new(readable, writable, ino)))
 }
 
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
     }
+
     fn writable(&self) -> bool {
         self.writable
     }
+
     fn read(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.exclusive_access();
         let mut total_read_size = 0usize;
         for slice in buf.buffers.iter_mut() {
-            let read_size = inner.inode.read_at(inner.offset, *slice);
+            let read_size = ROOT_FS.exclusive_session(|fs| {
+                fs.0
+                    .read_at(inner.ino, slice, inner.offset as u64)
+                    .expect("ext4 read failed")
+            });
             if read_size == 0 {
                 break;
             }
@@ -125,12 +234,16 @@ impl File for OSInode {
         }
         total_read_size
     }
+
     fn write(&self, buf: UserBuffer) -> usize {
         let mut inner = self.inner.exclusive_access();
         let mut total_write_size = 0usize;
         for slice in buf.buffers.iter() {
-            let write_size = inner.inode.write_at(inner.offset, *slice);
-            assert_eq!(write_size, slice.len());
+            let write_size = ROOT_FS.exclusive_session(|fs| {
+                fs.0
+                    .write_at(inner.ino, slice, inner.offset as u64)
+                    .expect("ext4 write failed")
+            });
             inner.offset += write_size;
             total_write_size += write_size;
         }

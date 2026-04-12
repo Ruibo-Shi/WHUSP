@@ -5,7 +5,11 @@ KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
 FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
+ROOTFS_DIR := ../user/target/$(TARGET)/$(MODE)/rootfs
 APPS := ../user/src/bin/*
+FS_BLOCK_SIZE := 4096
+FS_SIZE_MIB := 128
+FS_BLOCK_COUNT := 32768
 
 # BOARD
 BOARD := qemu
@@ -38,17 +42,24 @@ build: env $(KERNEL_BIN) fs-img
 
 env:
 	(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
-	cargo install cargo-binutils
-	rustup component add rust-src
-	rustup component add llvm-tools-preview
+	command -v rust-objcopy >/dev/null 2>&1 || cargo install cargo-binutils
+	(rustup component list --installed | grep '^rust-src') >/dev/null 2>&1 || rustup component add rust-src
+	(rustup component list --installed | grep '^llvm-tools-preview') >/dev/null 2>&1 || rustup component add llvm-tools-preview
 
 $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 fs-img: $(APPS)
 	@cd ../user && make build TEST=$(TEST)
+	@rm -rf $(ROOTFS_DIR)
+	@mkdir -p $(ROOTFS_DIR)
+	@for app in $(APPS); do \
+		name=$$(basename $$app .rs); \
+		cp ../user/target/$(TARGET)/$(MODE)/$$name $(ROOTFS_DIR)/$$name; \
+	done
 	@rm -f $(FS_IMG)
-	@cd ../easy-fs-fuse && cargo run --release -- -s ../user/src/bin/ -t ../user/target/riscv64gc-unknown-none-elf/release/
+	@truncate -s $(FS_SIZE_MIB)M $(FS_IMG)
+	@mke2fs -q -t ext4 -b $(FS_BLOCK_SIZE) -O ^orphan_file,^metadata_csum_seed -d $(ROOTFS_DIR) -F $(FS_IMG) $(FS_BLOCK_COUNT)
 
 $(APPS):
 
