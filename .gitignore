@@ -14,7 +14,7 @@ os/.gdb_history
 os/virt.out
 tools/
 pushall.sh
-disk.img
+*.img
 kernel-rv
 
 develop-guide/

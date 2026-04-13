@@ -42,7 +42,7 @@ RTC_BASE ?= utc
 GUI ?= off
 TEST_DISK ?=$(FS_IMG)
 AUX_DISK ?=
-PRIMARY_DISK ?=
+PRIMARY_DISK ?=$(TEST_DISK)
 EXTRA_QEMU_ARGS ?=
 
 ifeq ($(GUI),off)
@@ -120,7 +120,7 @@ fs-img: $(APPS)
 $(APPS):
 
 run: qemu-version-check kernel
-	@$(MAKE) --no-print-directory run-inner PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(AUX_DISK)"
+	@$(MAKE) --no-print-directory run-inner PRIMARY_DISK="$(PRIMARY_DISK)" AUX_DISK="$(AUX_DISK)"
 
 run-inner:
 	@if [ -z "$(PRIMARY_DISK)" ]; then \
@@ -145,8 +145,8 @@ qemu-version-check:
 	@sh scripts/qemu-ver-check.sh $(QEMU)
 
 debug: qemu-version-check kernel
-	@if [ ! -f "$(TEST_DISK)" ]; then \
-		echo "TEST_DISK does not exist: $(TEST_DISK)"; \
+	@if [ ! -f "$(PRIMARY_DISK)" ]; then \
+		echo "PRIMARY_DISK does not exist: $(PRIMARY_DISK)"; \
 		exit 1; \
 	fi
 	@if [ -n "$(AUX_DISK)" ] && [ ! -f "$(AUX_DISK)" ]; then \
@@ -154,20 +154,20 @@ debug: qemu-version-check kernel
 		exit 1; \
 	fi
 	@tmux new-session -d \
-		"$(MAKE) --no-print-directory run-inner PRIMARY_DISK='$(TEST_DISK)' AUX_DISK='$(AUX_DISK)' EXTRA_QEMU_ARGS='-s -S'" && \
+		"$(MAKE) --no-print-directory run-inner PRIMARY_DISK='$(PRIMARY_DISK)' AUX_DISK='$(AUX_DISK)' EXTRA_QEMU_ARGS='-s -S'" && \
 		tmux split-window -h "$(GDB) -ex 'file $(KERNEL_ELF)' -ex 'set arch $(GDB_ARCH)' -ex 'target remote localhost:1234'" && \
 		tmux -2 attach-session -d
 
 gdbserver: qemu-version-check kernel
-	@if [ ! -f "$(TEST_DISK)" ]; then \
-		echo "TEST_DISK does not exist: $(TEST_DISK)"; \
+	@if [ ! -f "$(PRIMARY_DISK)" ]; then \
+		echo "PRIMARY_DISK does not exist: $(PRIMARY_DISK)"; \
 		exit 1; \
 	fi
 	@if [ -n "$(AUX_DISK)" ] && [ ! -f "$(AUX_DISK)" ]; then \
 		echo "AUX_DISK does not exist: $(AUX_DISK)"; \
 		exit 1; \
 	fi
-	@$(MAKE) --no-print-directory run-inner PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(AUX_DISK)" EXTRA_QEMU_ARGS="-s -S"
+	@$(MAKE) --no-print-directory run-inner PRIMARY_DISK="$(PRIMARY_DISK)" AUX_DISK="$(AUX_DISK)" EXTRA_QEMU_ARGS="-s -S"
 
 gdbclient:
 	@$(GDB) -ex 'file $(KERNEL_ELF)' -ex 'set arch $(GDB_ARCH)' -ex 'target remote localhost:1234'

@@ -36,8 +36,14 @@ fn main() {
     println!("cargo:rustc-link-lib=static={lwext4_lib}");
     println!("cargo:rustc-link-search=native={}", c_build_path.display());
     println!("cargo:rerun-if-changed=c/wrapper.h");
-    println!("cargo:rerun-if-changed={}/src", c_src_path.to_str().unwrap());
-    println!("cargo:rerun-if-changed={}/Makefile", c_src_path.to_str().unwrap());
+    println!(
+        "cargo:rerun-if-changed={}/src",
+        c_src_path.to_str().unwrap()
+    );
+    println!(
+        "cargo:rerun-if-changed={}/Makefile",
+        c_src_path.to_str().unwrap()
+    );
     println!(
         "cargo:rerun-if-changed={}/toolchain/musl-generic.cmake",
         c_src_path.to_str().unwrap()
@@ -107,7 +113,10 @@ fn generates_bindings_to_rust(c_build_path: &Path, mpath: Option<String>) {
         // The input header we would like to generate bindings for.
         .header("c/wrapper.h")
         .clang_arg(format!("-I{}/include", c_build_path.display()))
-        .clang_arg(format!("-I{}/build_musl-generic/include/", c_build_path.display()))
+        .clang_arg(format!(
+            "-I{}/build_musl-generic/include/",
+            c_build_path.display()
+        ))
         .layout_tests(false)
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
         .parse_callbacks(Box::new(CustomCargoCallbacks));

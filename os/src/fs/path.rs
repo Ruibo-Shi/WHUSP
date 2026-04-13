@@ -4,6 +4,7 @@ use super::mount::{
     with_mount,
 };
 
+// TODO: add support for two disks path resolution
 pub(super) struct ResolvedFile {
     pub mount_id: MountId,
     pub ino: u32,
