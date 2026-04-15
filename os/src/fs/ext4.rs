@@ -83,12 +83,16 @@ impl Ext4Mount {
         })
     }
 
-    pub(super) fn lookup_path(&mut self, relpath: &str) -> Option<(u32, FsNodeKind)> {
+    pub(super) fn lookup_path_from(
+        &mut self,
+        start_ino: u32,
+        relpath: &str,
+    ) -> Option<(u32, FsNodeKind)> {
         if relpath.is_empty() {
-            return Some((EXT4_ROOT_INO, FsNodeKind::Directory));
+            return Some((start_ino, FsNodeKind::Directory));
         }
 
-        let mut ino = EXT4_ROOT_INO;
+        let mut ino = start_ino;
         let mut kind = FsNodeKind::Directory;
         for component in relpath
             .split('/')
@@ -105,7 +109,11 @@ impl Ext4Mount {
         Some((ino, kind))
     }
 
-    pub(super) fn resolve_parent<'a>(&mut self, relpath: &'a str) -> Option<(u32, &'a str)> {
+    pub(super) fn resolve_parent_from<'a>(
+        &mut self,
+        start_ino: u32,
+        relpath: &'a str,
+    ) -> Option<(u32, &'a str)> {
         if relpath.is_empty() {
             return None;
         }
@@ -116,7 +124,7 @@ impl Ext4Mount {
         if leaf_name.is_empty() || leaf_name == "." || leaf_name == ".." {
             return None;
         }
-        let (parent_ino, kind) = self.lookup_path(parent_path)?;
+        let (parent_ino, kind) = self.lookup_path_from(start_ino, parent_path)?;
         if kind != FsNodeKind::Directory {
             return None;
         }

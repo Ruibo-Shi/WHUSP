@@ -27,6 +27,8 @@ pub fn list_apps() {
     println!("**************/")
 }
 
+pub(crate) use inode::open_file_at;
 pub use inode::{OpenFlags, open_file};
+pub(crate) use path::WorkingDir;
 pub use pipe::make_pipe;
 pub use stdio::{Stdin, Stdout};

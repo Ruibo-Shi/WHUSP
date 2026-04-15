@@ -1,7 +1,7 @@
 use super::File;
 use super::ext4::FsNodeKind;
 use super::mount::{MountId, with_mount};
-use super::path::{ResolvedOpen, resolve_open_target};
+use super::path::{ResolvedOpen, WorkingDir, resolve_open_target};
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
 use alloc::sync::Arc;
@@ -76,9 +76,10 @@ impl OpenFlags {
     }
 }
 
-pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+fn open_file_impl(cwd: Option<WorkingDir>, name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
     let resolved = resolve_open_target(
+        cwd,
         name,
         writable || flags.contains(OpenFlags::TRUNC),
         flags.contains(OpenFlags::CREATE),
@@ -105,6 +106,14 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     };
 
     Some(Arc::new(OSInode::new(readable, writable, mount_id, ino)))
+}
+
+pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    open_file_impl(None, name, flags)
+}
+
+pub(crate) fn open_file_at(cwd: WorkingDir, name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    open_file_impl(Some(cwd), name, flags)
 }
 
 impl File for OSInode {

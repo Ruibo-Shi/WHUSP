@@ -3,7 +3,7 @@ use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
 use super::{PidHandle, pid_alloc};
 use super::{SignalFlags, add_task};
-use crate::fs::{File, Stdin, Stdout};
+use crate::fs::{File, Stdin, Stdout, WorkingDir};
 use crate::mm::{KERNEL_SPACE, MemorySet, translated_refmut};
 use crate::sync::{Condvar, Mutex, Semaphore, UPIntrFreeCell, UPIntrRefMut};
 use crate::trap::{TrapContext, trap_handler};
@@ -23,6 +23,7 @@ pub struct ProcessControlBlock {
 pub struct ProcessControlBlockInner {
     pub is_zombie: bool,
     pub memory_set: MemorySet,
+    pub cwd: WorkingDir,
     pub parent: Option<Weak<ProcessControlBlock>>,
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
@@ -71,6 +72,11 @@ impl ProcessControlBlock {
     pub fn inner_exclusive_access(&self) -> UPIntrRefMut<'_, ProcessControlBlockInner> {
         self.inner.exclusive_access()
     }
+
+    pub fn working_dir(&self) -> WorkingDir {
+        self.inner.exclusive_access().cwd
+    }
+
     // TODO: to understand
     pub fn new(elf_data: &[u8]) -> Arc<Self> {
         // memory_set with elf program headers/trampoline/trap context/user stack
@@ -83,9 +89,11 @@ impl ProcessControlBlock {
                 UPIntrFreeCell::new(ProcessControlBlockInner {
                     is_zombie: false,
                     memory_set,
+                    cwd: WorkingDir::root(),
                     parent: None,
                     children: Vec::new(),
                     exit_code: 0,
+                    // TODO: could try to extract this piece of code, neater
                     fd_table: vec![
                         // 0 -> stdin
                         Some(Arc::new(Stdin)),
@@ -209,6 +217,7 @@ impl ProcessControlBlock {
                 UPIntrFreeCell::new(ProcessControlBlockInner {
                     is_zombie: false,
                     memory_set,
+                    cwd: parent.cwd,
                     parent: Some(Arc::downgrade(self)),
                     children: Vec::new(),
                     exit_code: 0,

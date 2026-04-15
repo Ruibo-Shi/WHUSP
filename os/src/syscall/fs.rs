@@ -1,4 +1,4 @@
-use crate::fs::{OpenFlags, make_pipe, open_file};
+use crate::fs::{OpenFlags, make_pipe, open_file_at};
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
 use alloc::sync::Arc;
@@ -47,7 +47,8 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let process = current_process();
     let token = current_user_token();
     let path = translated_str(token, path);
-    if let Some(inode) = open_file(path.as_str(), OpenFlags::from_bits(flags).unwrap()) {
+    let cwd = process.working_dir();
+    if let Some(inode) = open_file_at(cwd, path.as_str(), OpenFlags::from_bits(flags).unwrap()) {
         let mut inner = process.inner_exclusive_access();
         let fd = inner.alloc_fd();
         inner.fd_table[fd] = Some(inode);

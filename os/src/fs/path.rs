@@ -1,5 +1,29 @@
 use super::ext4::FsNodeKind;
 use super::mount::{MountId, mount_exists, primary_mount_id, with_mount};
+use lwext4_rust::ffi::EXT4_ROOT_INO;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkingDir {
+    mount_id: MountId,
+    ino: u32,
+}
+
+impl WorkingDir {
+    pub(crate) fn root() -> Self {
+        Self {
+            mount_id: primary_mount_id(),
+            ino: EXT4_ROOT_INO,
+        }
+    }
+
+    fn mount_id(self) -> MountId {
+        self.mount_id
+    }
+
+    fn ino(self) -> u32 {
+        self.ino
+    }
+}
 
 pub(super) struct ResolvedFile {
     pub mount_id: MountId,
@@ -52,19 +76,21 @@ fn resolve_absolute_mount(path: &str) -> Option<(MountId, &str)> {
 
 fn resolve_on_mount<'a>(
     mount_id: MountId,
+    base_ino: u32,
     relpath: &'a str,
     for_create: bool,
 ) -> Option<ResolvedOpen<'a>> {
     with_mount(mount_id, |mount| {
+        // TODO: we need a ResolvedFile and CreateTarget new function.
         if for_create {
-            if let Some((ino, kind)) = mount.lookup_path(relpath) {
+            if let Some((ino, kind)) = mount.lookup_path_from(base_ino, relpath) {
                 Some(ResolvedOpen::Existing(ResolvedFile {
                     mount_id,
                     ino,
                     kind,
                 }))
             } else {
-                let (parent_ino, leaf_name) = mount.resolve_parent(relpath)?;
+                let (parent_ino, leaf_name) = mount.resolve_parent_from(base_ino, relpath)?;
                 Some(ResolvedOpen::Create(CreateTarget {
                     mount_id,
                     parent_ino,
@@ -72,7 +98,7 @@ fn resolve_on_mount<'a>(
                 }))
             }
         } else {
-            let (ino, kind) = mount.lookup_path(relpath)?;
+            let (ino, kind) = mount.lookup_path_from(base_ino, relpath)?;
             Some(ResolvedOpen::Existing(ResolvedFile {
                 mount_id,
                 ino,
@@ -84,17 +110,22 @@ fn resolve_on_mount<'a>(
 }
 
 pub(super) fn resolve_open_target(
+    cwd: Option<WorkingDir>,
     path: &str,
     _require_writable: bool,
     for_create: bool,
 ) -> Option<ResolvedOpen<'_>> {
     if path.starts_with('/') {
         let (mount_id, relpath) = resolve_absolute_mount(path)?;
-        return resolve_on_mount(mount_id, relpath, for_create);
+        return resolve_on_mount(mount_id, EXT4_ROOT_INO, relpath, for_create);
+    }
+
+    if let Some(cwd) = cwd {
+        return resolve_on_mount(cwd.mount_id(), cwd.ino(), path, for_create);
     }
 
     if is_bare_name(path) {
-        return resolve_on_mount(primary_mount_id(), path, for_create);
+        return resolve_on_mount(primary_mount_id(), EXT4_ROOT_INO, path, for_create);
     }
 
     None
