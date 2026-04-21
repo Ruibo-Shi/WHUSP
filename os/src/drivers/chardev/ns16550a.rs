@@ -10,18 +10,21 @@ use volatile::{ReadOnly, Volatile, WriteOnly};
 
 bitflags! {
     /// InterruptEnableRegister
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct IER: u8 {
         const RX_AVAILABLE = 1 << 0;
         const TX_EMPTY = 1 << 1;
     }
 
     /// LineStatusRegister
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct LSR: u8 {
         const DATA_AVAILABLE = 1 << 0;
         const THR_EMPTY = 1 << 5;
     }
 
     /// Model Control Register
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct MCR: u8 {
         const DATA_TERMINAL_READY = 1 << 0;
         const REQUEST_TO_SEND = 1 << 1;

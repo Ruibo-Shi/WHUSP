@@ -6,18 +6,18 @@ edition = "2024"
 
 [dependencies]
 riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
-buddy_system_allocator = "0.6"
-bitflags = "1.2.1"
-xmas-elf = "0.7.0"
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+buddy_system_allocator = "0.13.0"
+bitflags = "2.11.1"
+xmas-elf = "0.10.0"
 volatile = "0.3"
 virtio-drivers = { git = "https://github.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
-lose-net-stack = { git = "https://github.com/yfblock/lose-net-stack", rev = "db42380" }
+lose-net-stack = { git = "https://github.com/yfblock/lose-net-stack", rev = "1a73a861bb9b" }
 lwext4_rust = { path = "../vendor/lwext4_rust", default-features = false }
-embedded-graphics = "0.7.1"
-tinybmp = "0.3.1"
+embedded-graphics = "0.8.2"
+tinybmp = "0.7.0"
 log = "0.4"
-sbi-rt = { version = "0.0.2", features = ["legacy"] }
+sbi-rt = { version = "0.0.3", features = ["legacy"] }
 fdt = "0.1.5"
 
 [profile.release]

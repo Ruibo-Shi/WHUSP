@@ -297,7 +297,7 @@ impl MapArea {
                 ppn = PhysPageNum((vpn.0 as isize + pn_offset) as usize);
             }
         }
-        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits()).unwrap();
         page_table.map(vpn, ppn, pte_flags);
     }
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
@@ -350,6 +350,7 @@ pub enum MapType {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct MapPermission: u8 {
         const R = 1 << 1;
         const W = 1 << 2;
