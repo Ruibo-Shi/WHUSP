@@ -1,6 +1,7 @@
 use bitflags::*;
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct SignalFlags: u32 {
         const SIGINT    = 1 << 2;
         const SIGILL    = 1 << 4;

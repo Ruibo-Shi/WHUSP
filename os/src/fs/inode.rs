@@ -59,6 +59,7 @@ impl OSInode {
 
 // TODO: more flags to implemnent
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct OpenFlags: u32 {
         const RDONLY = 0;
         const WRONLY = 1 << 0;
@@ -71,7 +72,7 @@ bitflags! {
 
 impl OpenFlags {
     pub fn read_write(&self) -> (bool, bool) {
-        match self.bits & 0b11 {
+        match self.bits() & 0b11 {
             0 => (true, false),
             1 => (false, true),
             2 => (true, true),
@@ -80,7 +81,7 @@ impl OpenFlags {
     }
 
     pub fn writable_target(&self) -> bool {
-        matches!(self.bits & 0b11, 1 | 2)
+        matches!(self.bits() & 0b11, 1 | 2)
     }
 
     pub fn can_open_directory(&self) -> bool {
