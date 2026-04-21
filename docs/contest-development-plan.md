@@ -1,7 +1,5 @@
 # OSKernel2026 开发任务清单
 
-> 已按 `AGENTS.md` 的优先级重排：**P0 提交闭环 → P1 启动/设备基线 → P2 syscall 补齐 → P3 libc/动态链接 → P4 性能 → P5 LoongArch**。并行研究任务汇总在末尾。
-
 ## P0 — 提交闭环（contest submission blockers）
 
 - [x] 重写根目录 `Makefile`，让 `make all` 成为正式提交入口
@@ -27,7 +25,6 @@
 - [x] 明确区分评测盘 `x0` 和自带盘 `x1`
 - [x] 设计并实现测试盘挂载路径（`x0` → `/`，`x1` → `/x1`）
 - [x] 接入评测 EXT4 测试盘的只读访问
-- [x] ~~保留现有 easy-fs 路径~~（commit `e6d0fcb` 已完全移除 easy-fs，本任务作废）
 
 ## P2 — basic-musl syscall 补齐（跑通 `/musl/basic_testcode.sh` 前置）
 
@@ -44,7 +41,7 @@
 
 ### syscall ABI 合规性审计（参考 `reference-project/RocketOS`、`oskernel_neverdown`、`NighthawkOS`、`RustOsWhu`；每条独立一轮，动手前对照 `man 2` + 参考实现）
 
-- [ ] 统一 `SYSCALL_OPENAT = 56` 命名：user 侧 `user/src/syscall.rs:9` 写作 `SYSCALL_OPEN`，kernel 侧 `os/src/syscall/mod.rs:9` 写作 `SYSCALL_OPENAT`，同号异名；语义已经是 openat，只是命名需要对齐
+- [x] 统一 `SYSCALL_OPENAT = 56` 命名：user 侧 `user/src/syscall.rs:9` 写作 `SYSCALL_OPEN`，kernel 侧 `os/src/syscall/mod.rs:9` 写作 `SYSCALL_OPENAT`，同号异名；语义已经是 openat，只是命名需要对齐
 - [ ] `sys_waitpid`(260) 升级为 `sys_wait4(pid, wstatus, options, rusage)`：当前 `os/src/syscall/process.rs:72` 只接 2 参，且"still running 返回 -2" 非标准 —— Linux 默认应阻塞等待，`WNOHANG` flag 才立即返 0
 - [ ] 实现 `sys_exit_group`(94)：当前只有 `sys_exit`(93)，但 libc 的 `exit()` 走的是 exit_group，缺它多线程程序无法干净终止整个线程组
 - [ ] 修正 `sys_kill`(129) 信号参数类型：`os/src/syscall/process.rs:106` 用 `SignalFlags::from_bits(signal)` 把信号当 bitflags，但 Linux 信号号是整数（SIGKILL=9、SIGTERM=15 不是位标志），应直接按 signum 分发

@@ -6,7 +6,7 @@ const SYSCALL_ACCEPT: usize = 31;
 const SYSCALL_MKDIRAT: usize = 34;
 const SYSCALL_UNLINKAT: usize = 35;
 const SYSCALL_CHDIR: usize = 49;
-const SYSCALL_OPEN: usize = 56;
+const SYSCALL_OPENAT: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
 const SYSCALL_PIPE: usize = 59;
 const SYSCALL_GETDENTS64: usize = 61;
@@ -18,7 +18,7 @@ const SYSCALL_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
 const SYSCALL_GET_TIME: usize = 169;
 const SYSCALL_GETPID: usize = 172;
-const SYSCALL_FORK: usize = 220;
+const SYSCALL_CLONE: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAITPID: usize = 260;
 const SYSCALL_THREAD_CREATE: usize = 1000;
@@ -79,7 +79,7 @@ pub fn sys_accept(socket_fd: usize) -> isize {
 
 pub fn sys_open(path: &str, flags: u32) -> isize {
     syscall(
-        SYSCALL_OPEN,
+        SYSCALL_OPENAT,
         [
             AT_FDCWD as usize,
             path.as_ptr() as usize,
@@ -93,7 +93,7 @@ pub fn sys_open(path: &str, flags: u32) -> isize {
 
 pub fn sys_openat(dirfd: isize, path: &str, flags: u32, mode: u32) -> isize {
     syscall(
-        SYSCALL_OPEN,
+        SYSCALL_OPENAT,
         [
             dirfd as usize,
             path.as_ptr() as usize,
@@ -193,7 +193,8 @@ pub fn sys_getpid() -> isize {
 }
 
 pub fn sys_fork() -> isize {
-    syscall(SYSCALL_FORK, [0, 0, 0, 0, 0, 0])
+    // libc-style: fork() == clone(SIGCHLD, 0, 0, 0, 0)
+    syscall(SYSCALL_CLONE, [17, 0, 0, 0, 0, 0])
 }
 
 pub fn sys_exec(path: &str, args: &[*const u8]) -> isize {
