@@ -3,7 +3,6 @@
 // https://github.com/cfsamson/example-greenthreads
 #![no_std]
 #![no_main]
-#![feature(naked_functions)]
 //#![feature(asm)]
 
 extern crate alloc;
@@ -261,10 +260,9 @@ pub fn yield_task() {
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn switch(old: *mut TaskContext, new: *const TaskContext) {
-    unsafe {
-        // a0: _old, a1: _new
-        naked_asm!(
-            "
+    // a0: _old, a1: _new
+    naked_asm!(
+        "
             sd x1, 0x00(a0)
             sd x2, 0x08(a0)
             sd x8, 0x10(a0)
@@ -299,8 +297,7 @@ unsafe extern "C" fn switch(old: *mut TaskContext, new: *const TaskContext) {
 
             jr t0
             "
-        );
-    }
+    );
 }
 
 #[unsafe(no_mangle)]
