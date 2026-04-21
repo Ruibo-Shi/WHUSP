@@ -16,7 +16,9 @@ const LINE_START: &str = ">> ";
 use alloc::string::String;
 use alloc::vec::Vec;
 use user_lib::console::getchar;
-use user_lib::{OpenFlags, close, dup, exec, fork, open, pipe, waitpid};
+use user_lib::{
+    OpenFlags, chdir, close, dup, exec, fork, getcwd, getdents64, open, pipe, waitpid,
+};
 
 #[derive(Debug)]
 struct ProcessArguments {
@@ -74,17 +76,106 @@ impl ProcessArguments {
     }
 }
 
+fn try_builtin(line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    let Some(cmd) = parts.next() else {
+        return false;
+    };
+    match cmd {
+        "pwd" => {
+            let mut buf = [0u8; 256];
+            let ret = getcwd(&mut buf);
+            if ret == 0 {
+                println!("pwd: failed");
+            } else {
+                let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                match core::str::from_utf8(&buf[..len]) {
+                    Ok(s) => println!("{}", s),
+                    Err(_) => println!("pwd: invalid utf8"),
+                }
+            }
+            true
+        }
+        "cd" => {
+            let target = parts.next().unwrap_or("/");
+            let mut path = String::from(target);
+            path.push('\0');
+            if chdir(path.as_str()) < 0 {
+                println!("cd: {}: no such directory", target);
+            }
+            true
+        }
+        "ls" => {
+            let target = parts.next().unwrap_or(".");
+            let mut path = String::from(target);
+            path.push('\0');
+            let fd = open(path.as_str(), OpenFlags::RDONLY | OpenFlags::DIRECTORY);
+            if fd < 0 {
+                println!("ls: cannot access '{}'", target);
+            } else {
+                let fd = fd as usize;
+                let mut buf = [0u8; 1024];
+                loop {
+                    let n = getdents64(fd, &mut buf);
+                    if n <= 0 {
+                        break;
+                    }
+                    let n = n as usize;
+                    let mut off = 0usize;
+                    while off + 19 <= n {
+                        let reclen =
+                            u16::from_ne_bytes([buf[off + 16], buf[off + 17]]) as usize;
+                        if reclen == 0 || off + reclen > n {
+                            break;
+                        }
+                        let name_bytes = &buf[off + 19..off + reclen];
+                        let name_end = name_bytes
+                            .iter()
+                            .position(|&b| b == 0)
+                            .unwrap_or(name_bytes.len());
+                        if let Ok(s) = core::str::from_utf8(&name_bytes[..name_end]) {
+                            print!("{}  ", s);
+                        }
+                        off += reclen;
+                    }
+                }
+                println!("");
+                close(fd);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn print_prompt() {
+    let mut buf = [0u8; 256];
+    if getcwd(&mut buf) != 0 {
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        if let Ok(s) = core::str::from_utf8(&buf[..len]) {
+            print!("{} {}", s, LINE_START);
+            return;
+        }
+    }
+    print!("{}", LINE_START);
+}
+
 #[unsafe(no_mangle)]
 pub fn main() -> i32 {
     println!("Rust user shell");
     let mut line: String = String::new();
-    print!("{}", LINE_START);
+    print_prompt();
     loop {
         let c = getchar();
         match c {
             LF | CR => {
                 println!("");
                 if !line.is_empty() {
+                    if try_builtin(line.as_str()) {
+                        line.clear();
+                        print_prompt();
+                        continue;
+                    }
                     let splited: Vec<_> = line.as_str().split('|').collect();
                     let process_arguments_list: Vec<_> = splited
                         .iter()
@@ -195,7 +286,7 @@ pub fn main() -> i32 {
                     }
                     line.clear();
                 }
-                print!("{}", LINE_START);
+                print_prompt();
             }
             BS | DL => {
                 if !line.is_empty() {
