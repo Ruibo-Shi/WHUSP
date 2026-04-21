@@ -162,6 +162,25 @@ pub fn sys_unlinkat(dirfd: isize, path: *const u8, flags: u32) -> isize {
     }
 }
 
+pub fn sys_getdents64(fd: usize, buf: *mut u8, len: usize) -> isize {
+    if len == 0 {
+        return -1;
+    }
+    let token = current_user_token();
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
+    let Some(file) = inner
+        .fd_table
+        .get(fd)
+        .and_then(|file| file.as_ref())
+        .cloned()
+    else {
+        return -1;
+    };
+    drop(inner);
+    file.read_dirent64(UserBuffer::new(translated_byte_buffer(token, buf, len)))
+}
+
 pub fn sys_close(fd: usize) -> isize {
     let process = current_process();
     let mut inner = process.inner_exclusive_access();

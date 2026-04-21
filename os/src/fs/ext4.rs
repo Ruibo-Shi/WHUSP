@@ -53,6 +53,12 @@ impl Ext4BlockDevice for KernelDisk {
 type KernelExt4Fs = Ext4Filesystem<KernelHal, KernelDisk>;
 
 const EXT4_CONFIG: FsConfig = FsConfig { bcache_size: 256 };
+const LINUX_DIRENT64_HEADER_SIZE: usize = 19;
+const LINUX_DIRENT64_ALIGN: usize = 8;
+const DT_UNKNOWN: u8 = 0;
+const DT_DIR: u8 = 4;
+const DT_REG: u8 = 8;
+const DT_LNK: u8 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FsNodeKind {
@@ -68,6 +74,19 @@ fn into_node_kind(kind: InodeType) -> FsNodeKind {
         InodeType::RegularFile => FsNodeKind::RegularFile,
         _ => FsNodeKind::Other,
     }
+}
+
+fn into_linux_dtype(kind: InodeType) -> u8 {
+    match kind {
+        InodeType::Directory => DT_DIR,
+        InodeType::RegularFile => DT_REG,
+        InodeType::Symlink => DT_LNK,
+        _ => DT_UNKNOWN,
+    }
+}
+
+fn align_up(value: usize, align: usize) -> usize {
+    (value + align - 1) & !(align - 1)
 }
 
 pub(super) struct Ext4Mount {
@@ -166,6 +185,51 @@ impl Ext4Mount {
         self.fs
             .write_at(ino, buf, offset)
             .expect("ext4 write failed")
+    }
+
+    pub(super) fn read_dirent64(
+        &mut self,
+        ino: u32,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Option<(usize, u64)> {
+        let mut reader = self.fs.read_dir(ino, offset).ok()?;
+        let mut written = 0usize;
+        let mut next_offset = offset;
+
+        while let Some(entry) = reader.current() {
+            let d_ino = entry.ino() as u64;
+            let d_type = into_linux_dtype(entry.inode_type());
+            let name = entry.name().to_vec();
+            let d_reclen = align_up(
+                LINUX_DIRENT64_HEADER_SIZE + name.len() + 1,
+                LINUX_DIRENT64_ALIGN,
+            );
+
+            // TODO:a classic performance loss?
+            if d_reclen > buf.len().saturating_sub(written) {
+                if written == 0 {
+                    return None;
+                }
+                break;
+            }
+
+            reader.step().ok()?;
+            next_offset = reader.offset();
+
+            let entry_buf = &mut buf[written..written + d_reclen];
+            entry_buf.fill(0);
+            entry_buf[0..8].copy_from_slice(&d_ino.to_ne_bytes());
+            entry_buf[8..16].copy_from_slice(&(next_offset as i64).to_ne_bytes());
+            entry_buf[16..18].copy_from_slice(&(d_reclen as u16).to_ne_bytes());
+            entry_buf[18] = d_type;
+            entry_buf[LINUX_DIRENT64_HEADER_SIZE..LINUX_DIRENT64_HEADER_SIZE + name.len()]
+                .copy_from_slice(&name);
+
+            written += d_reclen;
+        }
+
+        Some((written, next_offset))
     }
 
     pub(super) fn list_root_names(&mut self) -> Vec<String> {

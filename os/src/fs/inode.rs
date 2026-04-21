@@ -5,6 +5,7 @@ use super::path::{ResolvedOpen, WorkingDir, resolve_open_target, resolve_parent_
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
 
@@ -224,6 +225,31 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+
+    fn read_dirent64(&self, user_buf: UserBuffer) -> isize {
+        if self.kind != FsNodeKind::Directory {
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let mut kernel_buf = vec![0u8; user_buf.len()];
+        let Some((read_size, next_offset)) = with_mount(inner.mount_id, |mount| {
+            mount.read_dirent64(inner.ino, inner.offset as u64, &mut kernel_buf)
+        })
+        .expect("filesystem mount is missing") else {
+            return -1;
+        };
+        if read_size == 0 {
+            return 0;
+        }
+        // TODO: feel that there will be a performance loss since it is not necessary
+        for (idx, byte_ref) in user_buf.into_iter().take(read_size).enumerate() {
+            unsafe {
+                *byte_ref = kernel_buf[idx];
+            }
+        }
+        inner.offset = next_offset as usize;
+        read_size as isize
     }
 
     fn working_dir(&self) -> Option<WorkingDir> {

@@ -9,6 +9,7 @@ const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPEN: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
 const SYSCALL_PIPE: usize = 59;
+const SYSCALL_GETDENTS64: usize = 61;
 const SYSCALL_READ: usize = 63;
 const SYSCALL_WRITE: usize = 64;
 const SYSCALL_EXIT: usize = 93;
@@ -138,6 +139,10 @@ pub fn sys_unlinkat(dirfd: isize, path: &str, flags: u32) -> isize {
             0,
         ],
     )
+}
+
+pub fn sys_getdents64(fd: usize, buf: *mut u8, len: usize) -> isize {
+    syscall(SYSCALL_GETDENTS64, [fd, buf as usize, len, 0, 0, 0])
 }
 
 pub fn sys_close(fd: usize) -> isize {
