@@ -34,6 +34,9 @@ pub fn mkdir(path: &str, mode: u32) -> isize {
 pub fn unlink(path: &str) -> isize {
     sys_unlinkat(AT_FDCWD, path, 0)
 }
+pub fn getdents64(fd: usize, buf: &mut [u8]) -> isize {
+    sys_getdents64(fd, buf.as_mut_ptr(), buf.len())
+}
 pub fn close(fd: usize) -> isize {
     sys_close(fd)
 }

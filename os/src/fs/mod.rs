@@ -12,6 +12,9 @@ pub trait File: Send + Sync {
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
     fn write(&self, buf: UserBuffer) -> usize;
+    fn read_dirent64(&self, _buf: UserBuffer) -> isize {
+        -1
+    }
     fn working_dir(&self) -> Option<WorkingDir> {
         None
     }
