@@ -5,7 +5,11 @@ TEST ?=
 ifeq ($(ARCH),riscv64)
 TARGET := riscv64gc-unknown-none-elf
 KERNEL_SRC := os/target/$(TARGET)/$(MODE)/os
+KERNEL_STAMP := os/target/$(TARGET)/$(MODE)/kernel-rv.stamp
 DISK_SRC := user/target/$(TARGET)/$(MODE)/fs.img
+DISK_STAMP := user/target/$(TARGET)/$(MODE)/fs-img.$(if $(strip $(TEST)),$(TEST),default).stamp
+KERNEL_INPUTS := Makefile os/Cargo.toml $(wildcard os/Cargo.lock) os/Makefile os/build.rs rust-toolchain.toml $(shell find os/src -type f ! -name linker.ld) $(shell find vendor/lwext4_rust -type f ! -path '*/target/*' ! -path '*/build_musl-generic/*')
+USER_INPUTS := user/Cargo.toml user/Makefile $(wildcard user/Cargo.lock) $(shell find user/src -type f)
 else
 $(error Unsupported ARCH '$(ARCH)' in root Makefile. Only ARCH=riscv64 is wired today.)
 endif
@@ -17,12 +21,18 @@ AUX_DISK ?=
 
 all: kernel-rv disk.img
 
-kernel-rv:
+$(KERNEL_SRC) $(KERNEL_STAMP) &: $(KERNEL_INPUTS)
 	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) kernel
+	@touch $(KERNEL_STAMP)
+
+kernel-rv: $(KERNEL_SRC) $(KERNEL_STAMP)
 	@cp $(KERNEL_SRC) kernel-rv
 
-disk.img:
+$(DISK_SRC) $(DISK_STAMP) &: $(USER_INPUTS) Makefile os/Makefile
 	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) TEST=$(TEST) fs-img
+	@touch $(DISK_STAMP)
+
+disk.img: $(DISK_SRC) $(DISK_STAMP)
 	@cp $(DISK_SRC) disk.img
 
 run-rv: all
@@ -32,10 +42,10 @@ run-rv: all
 		echo "For local development with generated disk.img on x0, use: make run-rv-dev"; \
 		exit 1; \
 	fi
-	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) TEST=$(TEST) run PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(CONTEST_AUX_DISK)"
+	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) TEST=$(TEST) run-inner PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(CONTEST_AUX_DISK)"
 
 run-rv-dev: all
-	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) TEST=$(TEST) run PRIMARY_DISK="$(PRIMARY_DISK)" AUX_DISK="$(AUX_DISK)"
+	@$(MAKE) --no-print-directory -C os ARCH=$(ARCH) MODE=$(MODE) TEST=$(TEST) run-inner PRIMARY_DISK="$(PRIMARY_DISK)" AUX_DISK="$(AUX_DISK)"
 
 run-rv-contest: run-rv
 
@@ -49,4 +59,4 @@ clean:
 	@$(MAKE) --no-print-directory -C user clean
 	@rm -f kernel-rv disk.img
 
-.PHONY: all kernel-rv disk.img run-rv run-rv-dev run-rv-contest fmt clean
+.PHONY: all run-rv run-rv-dev run-rv-contest fmt clean
