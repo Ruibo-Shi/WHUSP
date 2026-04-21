@@ -16,9 +16,7 @@ const LINE_START: &str = ">> ";
 use alloc::string::String;
 use alloc::vec::Vec;
 use user_lib::console::getchar;
-use user_lib::{
-    OpenFlags, chdir, close, dup, exec, fork, getcwd, getdents64, open, pipe, waitpid,
-};
+use user_lib::{OpenFlags, chdir, close, dup, exec, fork, getcwd, getdents64, open, pipe, waitpid};
 
 #[derive(Debug)]
 struct ProcessArguments {
@@ -123,8 +121,7 @@ fn try_builtin(line: &str) -> bool {
                     let n = n as usize;
                     let mut off = 0usize;
                     while off + 19 <= n {
-                        let reclen =
-                            u16::from_ne_bytes([buf[off + 16], buf[off + 17]]) as usize;
+                        let reclen = u16::from_ne_bytes([buf[off + 16], buf[off + 17]]) as usize;
                         if reclen == 0 || off + reclen > n {
                             break;
                         }
