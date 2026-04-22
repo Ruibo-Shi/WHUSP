@@ -20,7 +20,7 @@ use manager::fetch_task;
 use process::ProcessControlBlock;
 use switch::__switch;
 
-pub use clone::CloneFlags;
+pub use clone::{CloneArgs, CloneFlags, clone_current_thread};
 pub use context::TaskContext;
 pub use id::{IDLE_PID, KernelStack, PidHandle, kstack_alloc, pid_alloc};
 pub use manager::{add_task, pid2process, remove_from_pid2process, wakeup_task};
