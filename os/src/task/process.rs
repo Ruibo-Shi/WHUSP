@@ -1,8 +1,8 @@
 use super::TaskControlBlock;
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
+use super::{CloneArgs, CloneFlags, SignalFlags, add_task};
 use super::{PidHandle, pid_alloc};
-use super::{SignalFlags, add_task};
 use crate::fs::{File, Stdin, Stdout, WorkingDir};
 use crate::mm::{KERNEL_SPACE, MemorySet, translated_refmut};
 use crate::sync::{Condvar, Mutex, Semaphore, UPIntrFreeCell, UPIntrRefMut};
@@ -86,6 +86,34 @@ impl ProcessControlBlock {
         let mut inner = self.inner.exclusive_access();
         inner.cwd = cwd;
         inner.cwd_path = cwd_path;
+    }
+
+    pub fn attach_task(&self, task: Arc<TaskControlBlock>) -> usize {
+        let tid = task.inner_exclusive_access().res.as_ref().unwrap().tid;
+        let mut inner = self.inner_exclusive_access();
+        while inner.tasks.len() < tid + 1 {
+            inner.tasks.push(None);
+        }
+        inner.tasks[tid] = Some(task);
+        inner.memory_set.token()
+    }
+
+    pub fn configure_cloned_main_task(&self, args: CloneArgs) -> usize {
+        let inner = self.inner_exclusive_access();
+        let task = inner.tasks[0].as_ref().unwrap();
+        let mut task_inner = task.inner_exclusive_access();
+        let trap_cx = task_inner.get_trap_cx();
+        trap_cx.set_a0(0);
+        if args.stack != 0 {
+            trap_cx.set_sp(args.stack);
+        }
+        if args.flags.contains(CloneFlags::CLONE_SETTLS) {
+            trap_cx.set_tp(args.tls);
+        }
+        if args.flags.contains(CloneFlags::CLONE_CHILD_CLEARTID) {
+            task_inner.clear_child_tid = Some(args.ctid);
+        }
+        inner.memory_set.token()
     }
 
     // TODO: to understand
