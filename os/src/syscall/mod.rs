@@ -37,6 +37,7 @@ const SYSCALL_CONDVAR_CREATE: usize = 1030;
 const SYSCALL_CONDVAR_SIGNAL: usize = 1031;
 const SYSCALL_CONDVAR_WAIT: usize = 1032;
 
+mod errno;
 mod fs;
 mod net;
 mod process;
@@ -44,6 +45,7 @@ mod sync;
 mod thread;
 mod wait;
 
+use errno::{SysError, ret};
 use fs::*;
 use net::*;
 use process::*;
@@ -52,12 +54,16 @@ use thread::*;
 use wait::*;
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
-    match syscall_id {
+    if syscall_id == SYSCALL_EXIT {
+        sys_exit(args[0] as i32);
+    }
+
+    ret(match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1]),
         SYSCALL_DUP => sys_dup(args[0]),
-        SYSCALL_CONNECT => sys_connect(args[0] as _, args[1] as _, args[2] as _),
-        SYSCALL_LISTEN => sys_listen(args[0] as _),
-        SYSCALL_ACCEPT => sys_accept(args[0] as _),
+        SYSCALL_CONNECT => Ok(sys_connect(args[0] as _, args[1] as _, args[2] as _)),
+        SYSCALL_LISTEN => Ok(sys_listen(args[0] as _)),
+        SYSCALL_ACCEPT => Ok(sys_accept(args[0] as _)),
         SYSCALL_MKDIRAT => sys_mkdirat(args[0] as isize, args[1] as *const u8, args[2] as u32),
         SYSCALL_UNLINKAT => sys_unlinkat(args[0] as isize, args[1] as *const u8, args[2] as u32),
         SYSCALL_CHDIR => sys_chdir(args[0] as *const u8),
@@ -72,7 +78,6 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETDENTS64 => sys_getdents64(args[0], args[1] as *mut u8, args[2]),
         SYSCALL_READ => sys_read(args[0], args[1] as *const u8, args[2]),
         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
-        SYSCALL_EXIT => sys_exit(args[0] as i32),
         SYSCALL_WAITID => sys_waitid(
             args[0] as i32,
             args[1] as i32,
@@ -80,11 +85,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as i32,
             args[4] as *mut RUsage,
         ),
-        SYSCALL_SLEEP => sys_sleep(args[0]),
-        SYSCALL_YIELD => sys_yield(),
+        SYSCALL_SLEEP => Ok(sys_sleep(args[0])),
+        SYSCALL_YIELD => Ok(sys_yield()),
         SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
-        SYSCALL_GET_TIME => sys_get_time(),
-        SYSCALL_GETPID => sys_getpid(),
+        SYSCALL_GET_TIME => Ok(sys_get_time()),
+        SYSCALL_GETPID => Ok(sys_getpid()),
         SYSCALL_CLONE => sys_clone(args[0], args[1], args[2], args[3], args[4]),
         SYSCALL_EXEC => sys_exec(
             args[0] as *const u8,
@@ -97,18 +102,18 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as i32,
             args[3] as *mut RUsage,
         ),
-        SYSCALL_THREAD_CREATE => sys_thread_create(args[0], args[1]),
-        SYSCALL_GETTID => sys_gettid(),
-        SYSCALL_WAITTID => sys_waittid(args[0]) as isize,
-        SYSCALL_MUTEX_CREATE => sys_mutex_create(args[0] == 1),
-        SYSCALL_MUTEX_LOCK => sys_mutex_lock(args[0]),
-        SYSCALL_MUTEX_UNLOCK => sys_mutex_unlock(args[0]),
-        SYSCALL_SEMAPHORE_CREATE => sys_semaphore_create(args[0]),
-        SYSCALL_SEMAPHORE_UP => sys_semaphore_up(args[0]),
-        SYSCALL_SEMAPHORE_DOWN => sys_semaphore_down(args[0]),
-        SYSCALL_CONDVAR_CREATE => sys_condvar_create(),
-        SYSCALL_CONDVAR_SIGNAL => sys_condvar_signal(args[0]),
-        SYSCALL_CONDVAR_WAIT => sys_condvar_wait(args[0], args[1]),
-        _ => panic!("Unsupported syscall_id: {}", syscall_id),
-    }
+        SYSCALL_THREAD_CREATE => Ok(sys_thread_create(args[0], args[1])),
+        SYSCALL_GETTID => Ok(sys_gettid()),
+        SYSCALL_WAITTID => Ok(sys_waittid(args[0]) as isize),
+        SYSCALL_MUTEX_CREATE => Ok(sys_mutex_create(args[0] == 1)),
+        SYSCALL_MUTEX_LOCK => Ok(sys_mutex_lock(args[0])),
+        SYSCALL_MUTEX_UNLOCK => Ok(sys_mutex_unlock(args[0])),
+        SYSCALL_SEMAPHORE_CREATE => Ok(sys_semaphore_create(args[0])),
+        SYSCALL_SEMAPHORE_UP => Ok(sys_semaphore_up(args[0])),
+        SYSCALL_SEMAPHORE_DOWN => Ok(sys_semaphore_down(args[0])),
+        SYSCALL_CONDVAR_CREATE => Ok(sys_condvar_create()),
+        SYSCALL_CONDVAR_SIGNAL => Ok(sys_condvar_signal(args[0])),
+        SYSCALL_CONDVAR_WAIT => Ok(sys_condvar_wait(args[0], args[1])),
+        _ => Err(SysError::ENOSYS),
+    })
 }
