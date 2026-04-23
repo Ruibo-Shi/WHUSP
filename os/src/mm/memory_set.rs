@@ -2,7 +2,11 @@ use super::{FrameTracker, frame_alloc};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
-use crate::config::{PAGE_SIZE, TRAMPOLINE, USER_HEAP_SIZE, memory_end, mmio_regions};
+use crate::config::{
+    PAGE_SIZE, TRAMPOLINE, USER_HEAP_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT, memory_end,
+    mmio_regions,
+};
+use crate::fs::File;
 use crate::sync::UPIntrFreeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -33,6 +37,7 @@ pub fn kernel_token() -> usize {
     KERNEL_SPACE.exclusive_access().token()
 }
 
+// TODO: replace vec to a high perfermonce data structure
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
@@ -40,6 +45,7 @@ pub struct MemorySet {
     brk: usize,
     brk_limit: usize,
     brk_mapped_end: usize,
+    mmap_next: usize,
 }
 
 pub struct ElfLoadInfo {
@@ -60,6 +66,7 @@ impl MemorySet {
             brk: 0,
             brk_limit: 0,
             brk_mapped_end: 0,
+            mmap_next: USER_MMAP_BASE,
         }
     }
     pub fn token(&self) -> usize {
@@ -248,6 +255,7 @@ impl MemorySet {
         memory_set.brk = heap_base;
         memory_set.brk_limit = brk_limit;
         memory_set.brk_mapped_end = heap_base;
+        memory_set.mmap_next = USER_MMAP_BASE;
         memory_set.push(
             MapArea::new(
                 heap_base.into(),
@@ -273,6 +281,7 @@ impl MemorySet {
         memory_set.brk = user_space.brk;
         memory_set.brk_limit = user_space.brk_limit;
         memory_set.brk_mapped_end = user_space.brk_mapped_end;
+        memory_set.mmap_next = user_space.mmap_next;
         // map trampoline
         memory_set.map_trampoline();
         // copy data sections/trap_context/user_stack
@@ -327,6 +336,53 @@ impl MemorySet {
         self.brk_mapped_end = new_mapped_end;
         self.brk
     }
+    pub fn mmap_area(
+        &mut self,
+        len: usize,
+        permission: MapPermission,
+        backing_file: Option<Arc<dyn File + Send + Sync>>,
+        file_offset: usize,
+        shared: bool,
+        writable: bool,
+    ) -> Option<usize> {
+        let len = page_align_up(len);
+        let start = self.alloc_mmap_range(len)?;
+        let end = start + len;
+        let mut area = MapArea::new(start.into(), end.into(), MapType::Framed, permission);
+        area.mmap_info = Some(MmapInfo {
+            shared,
+            writable,
+            len,
+            file_offset,
+            backing_file,
+        });
+        area.map(&mut self.page_table);
+        area.load_mmap_data(&self.page_table);
+        self.areas.push(area);
+        self.mmap_next = end;
+        Some(start)
+    }
+    pub fn munmap_area(&mut self, start: usize, len: usize) -> bool {
+        if len == 0 || start % PAGE_SIZE != 0 {
+            return false;
+        }
+        let Some(end) = start.checked_add(page_align_up(len)) else {
+            return false;
+        };
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).floor();
+        let Some(idx) = self.areas.iter().position(|area| {
+            area.is_mmap()
+                && area.vpn_range.get_start() == start_vpn
+                && area.vpn_range.get_end() == end_vpn
+        }) else {
+            return false;
+        };
+        let mut area = self.areas.remove(idx);
+        area.flush_mmap_data(&self.page_table);
+        area.unmap(&mut self.page_table);
+        true
+    }
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {
@@ -341,6 +397,34 @@ impl MemorySet {
         //*self = Self::new_bare();
         self.areas.clear();
     }
+
+    fn alloc_mmap_range(&self, len: usize) -> Option<usize> {
+        if len == 0 || len > USER_MMAP_LIMIT - USER_MMAP_BASE {
+            return None;
+        }
+        let mut start = page_align_up(self.mmap_next.max(USER_MMAP_BASE));
+        while start
+            .checked_add(len)
+            .is_some_and(|end| end <= USER_MMAP_LIMIT)
+        {
+            let end = start + len;
+            if !self.range_overlaps(start, end) {
+                return Some(start);
+            }
+            start += PAGE_SIZE;
+        }
+        None
+    }
+
+    fn range_overlaps(&self, start: usize, end: usize) -> bool {
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).floor();
+        self.areas.iter().any(|area| {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            start_vpn < area_end && end_vpn > area_start
+        })
+    }
 }
 
 fn page_align_up(addr: usize) -> usize {
@@ -352,6 +436,16 @@ pub struct MapArea {
     data_frames: BTreeMap<VirtPageNum, FrameTracker>,
     map_type: MapType,
     map_perm: MapPermission,
+    mmap_info: Option<MmapInfo>,
+}
+
+#[derive(Clone)]
+struct MmapInfo {
+    shared: bool,
+    writable: bool,
+    len: usize,
+    file_offset: usize,
+    backing_file: Option<Arc<dyn File + Send + Sync>>,
 }
 
 impl MapArea {
@@ -368,6 +462,7 @@ impl MapArea {
             data_frames: BTreeMap::new(),
             map_type,
             map_perm,
+            mmap_info: None,
         }
     }
     pub fn from_another(another: &MapArea) -> Self {
@@ -376,6 +471,7 @@ impl MapArea {
             data_frames: BTreeMap::new(),
             map_type: another.map_type,
             map_perm: another.map_perm,
+            mmap_info: another.mmap_info.clone(),
         }
     }
 
@@ -437,6 +533,58 @@ impl MapArea {
             copied += copy_len;
             page_offset = 0;
             current_vpn.step();
+        }
+    }
+
+    fn is_mmap(&self) -> bool {
+        self.mmap_info.is_some()
+    }
+
+    fn load_mmap_data(&self, page_table: &PageTable) {
+        let Some(info) = &self.mmap_info else {
+            return;
+        };
+        let Some(file) = &info.backing_file else {
+            return;
+        };
+        let mut remaining = info.len;
+        let mut file_offset = info.file_offset;
+        for vpn in self.vpn_range {
+            if remaining == 0 {
+                break;
+            }
+            let copy_len = remaining.min(PAGE_SIZE);
+            let dst = &mut page_table.translate(vpn).unwrap().ppn().get_bytes_array()[..copy_len];
+            let read_size = file.read_at(file_offset, dst);
+            if read_size < copy_len {
+                break;
+            }
+            remaining -= copy_len;
+            file_offset += copy_len;
+        }
+    }
+
+    fn flush_mmap_data(&self, page_table: &PageTable) {
+        let Some(info) = &self.mmap_info else {
+            return;
+        };
+        if !info.shared || !info.writable {
+            return;
+        }
+        let Some(file) = &info.backing_file else {
+            return;
+        };
+        let mut remaining = info.len;
+        let mut file_offset = info.file_offset;
+        for vpn in self.vpn_range {
+            if remaining == 0 {
+                break;
+            }
+            let copy_len = remaining.min(PAGE_SIZE);
+            let src = &page_table.translate(vpn).unwrap().ppn().get_bytes_array()[..copy_len];
+            file.write_at(file_offset, src);
+            remaining -= copy_len;
+            file_offset += copy_len;
         }
     }
 }

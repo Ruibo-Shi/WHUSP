@@ -228,6 +228,28 @@ impl File for OSInode {
         total_write_size
     }
 
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+        if self.kind == FsNodeKind::Directory {
+            return 0;
+        }
+        let inner = self.inner.exclusive_access();
+        with_mount(inner.mount_id, |mount| {
+            mount.read_at(inner.ino, buf, offset as u64)
+        })
+        .expect("filesystem mount is missing")
+    }
+
+    fn write_at(&self, offset: usize, buf: &[u8]) -> usize {
+        if self.kind == FsNodeKind::Directory {
+            return 0;
+        }
+        let inner = self.inner.exclusive_access();
+        with_mount(inner.mount_id, |mount| {
+            mount.write_at(inner.ino, buf, offset as u64)
+        })
+        .expect("filesystem mount is missing")
+    }
+
     fn read_dirent64(&self, user_buf: UserBuffer) -> isize {
         if self.kind != FsNodeKind::Directory {
             return -1;
