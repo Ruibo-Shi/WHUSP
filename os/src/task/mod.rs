@@ -100,6 +100,7 @@ pub fn exit_current_and_run_next(exit_code: i32) {
         process_inner.is_zombie = true;
         // record exit code of main process
         process_inner.exit_code = exit_code;
+        let parent = process_inner.parent.as_ref().and_then(|p| p.upgrade());
 
         {
             // move all child processes under init process
@@ -126,6 +127,21 @@ pub fn exit_current_and_run_next(exit_code: i32) {
         // for now to avoid deadlock/double borrow problem.
         drop(process_inner);
         recycle_res.clear();
+
+        if let Some(parent) = parent {
+            let parent_task = parent
+                .inner_exclusive_access()
+                .tasks
+                .first()
+                .and_then(|task| task.as_ref().map(Arc::clone));
+            if let Some(parent_task) = parent_task {
+                let is_blocked =
+                    parent_task.inner_exclusive_access().task_status == TaskStatus::Blocked;
+                if is_blocked {
+                    wakeup_task(parent_task);
+                }
+            }
+        }
 
         let mut process_inner = process.inner_exclusive_access();
         process_inner.children.clear();

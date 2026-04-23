@@ -22,6 +22,7 @@ use buddy_system_allocator::LockedHeap;
 pub use file::*;
 pub use net::*;
 pub use sync::*;
+pub use syscall::SigInfo;
 use syscall::*;
 pub use task::*;
 
