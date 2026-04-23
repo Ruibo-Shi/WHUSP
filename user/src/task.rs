@@ -28,13 +28,16 @@ pub fn getpid() -> isize {
     sys_getpid()
 }
 pub fn fork() -> isize {
-    sys_fork()
+    let ret = sys_fork();
+    if ret < 0 { -1 } else { ret }
 }
 pub fn exec(path: &str, args: &[*const u8]) -> isize {
-    sys_exec(path, args)
+    let ret = sys_exec(path, args);
+    if ret < 0 { -1 } else { ret }
 }
 pub fn execve(path: &str, args: &[*const u8], envs: &[*const u8]) -> isize {
-    sys_execve(path, args, envs)
+    let ret = sys_execve(path, args, envs);
+    if ret < 0 { -1 } else { ret }
 }
 
 pub fn wait(exit_code: &mut i32) -> isize {
@@ -48,6 +51,7 @@ pub fn wait(exit_code: &mut i32) -> isize {
                 *exit_code = wait_exit_code(status);
                 return exit_pid;
             }
+            exit_pid if exit_pid < 0 => return -1,
             exit_pid => return exit_pid,
         }
     }
@@ -64,6 +68,7 @@ pub fn waitpid(pid: usize, exit_code: &mut i32) -> isize {
                 *exit_code = wait_exit_code(status);
                 return exit_pid;
             }
+            exit_pid if exit_pid < 0 => return -1,
             exit_pid => return exit_pid,
         }
     }
@@ -74,6 +79,8 @@ pub fn waitpid_nb(pid: usize, exit_code: &mut i32) -> isize {
     let ret = sys_wait4(pid as isize, &mut status, WNOHANG, core::ptr::null_mut());
     if ret > 0 {
         *exit_code = wait_exit_code(status);
+    } else if ret < 0 {
+        return -1;
     }
     ret
 }

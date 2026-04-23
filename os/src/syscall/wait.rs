@@ -2,6 +2,8 @@ use crate::mm::translated_refmut;
 use crate::task::{block_current_and_run_next, current_process};
 use alloc::sync::Arc;
 
+use super::errno::{SysError, SysResult};
+
 const WNOHANG: i32 = 1;
 const WUNTRACED: i32 = 2;
 const WEXITED: i32 = 4;
@@ -90,12 +92,12 @@ fn write_rusage(token: usize, rusage: *mut RUsage) {
     }
 }
 
-pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsage) -> isize {
+pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsage) -> SysResult {
     if options < 0 || options & !(WNOHANG | WUNTRACED | WCONTINUED) != 0 {
-        return -1;
+        return Err(SysError::EINVAL);
     }
     if pid == 0 || pid < -1 {
-        return -1;
+        return Err(SysError::ECHILD);
     }
 
     loop {
@@ -106,7 +108,7 @@ pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsag
             .iter()
             .any(|child| wait4_child_matches(child.getpid(), pid))
         {
-            return -1;
+            return Err(SysError::ECHILD);
         }
 
         let zombie = inner.children.iter().enumerate().find(|(_, child)| {
@@ -123,11 +125,11 @@ pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsag
 
             let child = inner.children.remove(idx);
             assert_eq!(Arc::strong_count(&child), 1);
-            return found_pid as isize;
+            return Ok(found_pid as isize);
         }
 
         if options & WNOHANG != 0 {
-            return 0;
+            return Ok(0);
         }
         drop(inner);
         drop(process);
@@ -141,18 +143,18 @@ pub fn sys_waitid(
     infop: *mut LinuxSigInfo,
     options: i32,
     rusage: *mut RUsage,
-) -> isize {
+) -> SysResult {
     if options < 0
         || options & !(WNOHANG | WEXITED | WNOWAIT | WUNTRACED | WCONTINUED) != 0
         || options & WEXITED == 0
     {
-        return -1;
+        return Err(SysError::EINVAL);
     }
     if idtype != P_ALL && idtype != P_PID {
-        return -1;
+        return Err(SysError::ECHILD);
     }
     if idtype == P_PID && id <= 0 {
-        return -1;
+        return Err(SysError::EINVAL);
     }
 
     loop {
@@ -163,7 +165,7 @@ pub fn sys_waitid(
             .iter()
             .any(|child| waitid_child_matches(child.getpid(), idtype, id))
         {
-            return -1;
+            return Err(SysError::ECHILD);
         }
 
         let zombie = inner.children.iter().enumerate().find(|(_, child)| {
@@ -190,7 +192,7 @@ pub fn sys_waitid(
                 let child = inner.children.remove(idx);
                 assert_eq!(Arc::strong_count(&child), 1);
             }
-            return 0;
+            return Ok(0);
         }
 
         if options & WNOHANG != 0 {
@@ -199,7 +201,7 @@ pub fn sys_waitid(
                 *translated_refmut(token, infop) = LinuxSigInfo::default();
             }
             write_rusage(token, rusage);
-            return 0;
+            return Ok(0);
         }
         drop(inner);
         drop(process);

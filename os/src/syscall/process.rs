@@ -10,6 +10,8 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use super::errno::{SysError, SysResult};
+
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
     panic!("Unreachable in sys_exit!");
@@ -28,9 +30,9 @@ pub fn sys_getpid() -> isize {
     current_task().unwrap().process.upgrade().unwrap().getpid() as isize
 }
 
-pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usize) -> isize {
+pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usize) -> SysResult {
     let Some(args) = CloneArgs::parse(flags, stack, ptid, tls, ctid) else {
-        return -1;
+        return Err(SysError::EINVAL);
     };
     if args.is_thread() {
         sys_clone_thread(args)
@@ -39,7 +41,7 @@ pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usiz
     }
 }
 
-fn sys_clone_process(args: CloneArgs) -> isize {
+fn sys_clone_process(args: CloneArgs) -> SysResult {
     let current_process = current_process();
     let new_process = current_process.fork();
     let new_pid = new_process.getpid();
@@ -52,10 +54,10 @@ fn sys_clone_process(args: CloneArgs) -> isize {
     if args.flags.contains(CloneFlags::CLONE_CHILD_SETTID) {
         *translated_refmut(child_token, args.ctid as *mut i32) = new_pid as i32;
     }
-    new_pid as isize
+    Ok(new_pid as isize)
 }
 
-fn sys_clone_thread(args: CloneArgs) -> isize {
+fn sys_clone_thread(args: CloneArgs) -> SysResult {
     let process = current_process();
     let cloned = clone_current_thread(args);
     let process_token = process.attach_task(Arc::clone(&cloned.task));
@@ -67,7 +69,7 @@ fn sys_clone_thread(args: CloneArgs) -> isize {
         *translated_refmut(process_token, args.ctid as *mut i32) = cloned.tid as i32;
     }
     add_task(cloned.task);
-    cloned.tid as isize
+    Ok(cloned.tid as isize)
 }
 
 fn translated_string_array(token: usize, mut ptr: *const usize) -> Vec<String> {
@@ -88,7 +90,7 @@ fn translated_string_array(token: usize, mut ptr: *const usize) -> Vec<String> {
     strings
 }
 
-pub fn sys_exec(path: *const u8, args: *const usize, envs: *const usize) -> isize {
+pub fn sys_exec(path: *const u8, args: *const usize, envs: *const usize) -> SysResult {
     let process = current_process();
     let token = current_user_token();
     let path = translated_str(token, path);
@@ -99,21 +101,21 @@ pub fn sys_exec(path: *const u8, args: *const usize, envs: *const usize) -> isiz
         let argc = args_vec.len();
         process.exec(all_data.as_slice(), args_vec, envs_vec);
         // return argc because cx.x[10] will be covered with it later
-        argc as isize
+        Ok(argc as isize)
     } else {
-        -1
+        Err(SysError::ENOENT)
     }
 }
 
-pub fn sys_kill(pid: usize, signal: u32) -> isize {
+pub fn sys_kill(pid: usize, signal: u32) -> SysResult {
     if let Some(process) = pid2process(pid) {
         if let Some(flag) = SignalFlags::from_bits(signal) {
             process.inner_exclusive_access().signals |= flag;
-            0
+            Ok(0)
         } else {
-            -1
+            Err(SysError::EINVAL)
         }
     } else {
-        -1
+        Err(SysError::ESRCH)
     }
 }
