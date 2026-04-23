@@ -2,7 +2,7 @@ use super::{FrameTracker, frame_alloc};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
-use crate::config::{PAGE_SIZE, TRAMPOLINE, memory_end, mmio_regions};
+use crate::config::{PAGE_SIZE, TRAMPOLINE, USER_HEAP_SIZE, memory_end, mmio_regions};
 use crate::sync::UPIntrFreeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -36,6 +36,10 @@ pub fn kernel_token() -> usize {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    brk_base: usize,
+    brk: usize,
+    brk_limit: usize,
+    brk_mapped_end: usize,
 }
 
 pub struct ElfLoadInfo {
@@ -52,6 +56,10 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            brk_base: 0,
+            brk: 0,
+            brk_limit: 0,
+            brk_mapped_end: 0,
         }
     }
     pub fn token(&self) -> usize {
@@ -196,7 +204,7 @@ impl MemorySet {
         let ph_offset = elf_header.pt2.ph_offset() as usize;
         let ph_size = ph_entry_size as usize * ph_count as usize;
         let mut phdr = 0;
-        let mut max_end_vpn = VirtPageNum(0);
+        let mut max_end_va = 0usize;
         for i in 0..ph_count {
             let ph = elf.program_header(i).unwrap();
             let ph_type = ph.get_type().unwrap();
@@ -206,6 +214,8 @@ impl MemorySet {
             if ph_type == xmas_elf::program::Type::Load {
                 let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
                 let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
+                let segment_end = ph.virtual_addr() as usize + ph.mem_size() as usize;
+                max_end_va = max_end_va.max(segment_end);
                 let mut map_perm = MapPermission::U;
                 let ph_flags = ph.flags();
                 if ph_flags.is_read() {
@@ -218,7 +228,6 @@ impl MemorySet {
                     map_perm |= MapPermission::X;
                 }
                 let map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm);
-                max_end_vpn = map_area.vpn_range.get_end();
                 memory_set.push_with_offset(
                     map_area,
                     Some(&elf.input[ph.offset() as usize..(ph.offset() + ph.file_size()) as usize]),
@@ -233,9 +242,22 @@ impl MemorySet {
                 }
             }
         }
-        let max_end_va: VirtAddr = max_end_vpn.into();
-        let mut user_stack_base: usize = max_end_va.into();
-        user_stack_base += PAGE_SIZE;
+        let heap_base = page_align_up(max_end_va + PAGE_SIZE);
+        let brk_limit = heap_base + USER_HEAP_SIZE;
+        memory_set.brk_base = heap_base;
+        memory_set.brk = heap_base;
+        memory_set.brk_limit = brk_limit;
+        memory_set.brk_mapped_end = heap_base;
+        memory_set.push(
+            MapArea::new(
+                heap_base.into(),
+                heap_base.into(),
+                MapType::Framed,
+                MapPermission::R | MapPermission::W | MapPermission::U,
+            ),
+            None,
+        );
+        let user_stack_base = brk_limit + PAGE_SIZE;
         ElfLoadInfo {
             memory_set,
             ustack_base: user_stack_base,
@@ -247,6 +269,10 @@ impl MemorySet {
     }
     pub fn from_existed_user(user_space: &MemorySet) -> MemorySet {
         let mut memory_set = Self::new_bare();
+        memory_set.brk_base = user_space.brk_base;
+        memory_set.brk = user_space.brk;
+        memory_set.brk_limit = user_space.brk_limit;
+        memory_set.brk_mapped_end = user_space.brk_mapped_end;
         // map trampoline
         memory_set.map_trampoline();
         // copy data sections/trap_context/user_stack
@@ -264,6 +290,43 @@ impl MemorySet {
         }
         memory_set
     }
+    pub fn set_program_break(&mut self, addr: usize) -> usize {
+        if addr == 0 {
+            return self.brk;
+        }
+        if addr < self.brk_base || addr > self.brk_limit {
+            return self.brk;
+        }
+
+        let old_mapped_end = self.brk_mapped_end;
+        let new_mapped_end = page_align_up(addr);
+        let heap_start_vpn = VirtAddr::from(self.brk_base).floor();
+        let area_idx = self
+            .areas
+            .iter()
+            .position(|area| area.vpn_range.get_start() == heap_start_vpn)
+            .expect("heap area missing from user memory set");
+        let heap_area = &mut self.areas[area_idx];
+
+        if new_mapped_end > old_mapped_end {
+            let start_vpn = VirtAddr::from(old_mapped_end).floor();
+            let end_vpn = VirtAddr::from(new_mapped_end).floor();
+            for vpn in VPNRange::new(start_vpn, end_vpn) {
+                heap_area.map_one(&mut self.page_table, vpn);
+            }
+        } else if new_mapped_end < old_mapped_end {
+            let start_vpn = VirtAddr::from(new_mapped_end).floor();
+            let end_vpn = VirtAddr::from(old_mapped_end).floor();
+            for vpn in VPNRange::new(start_vpn, end_vpn) {
+                heap_area.unmap_one(&mut self.page_table, vpn);
+            }
+        }
+
+        heap_area.vpn_range = VPNRange::new(heap_start_vpn, VirtAddr::from(new_mapped_end).floor());
+        self.brk = addr;
+        self.brk_mapped_end = new_mapped_end;
+        self.brk
+    }
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {
@@ -278,6 +341,10 @@ impl MemorySet {
         //*self = Self::new_bare();
         self.areas.clear();
     }
+}
+
+fn page_align_up(addr: usize) -> usize {
+    (addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }
 
 pub struct MapArea {

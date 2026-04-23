@@ -19,6 +19,7 @@ const SYSCALL_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
 const SYSCALL_GET_TIME: usize = 169;
 const SYSCALL_GETPID: usize = 172;
+const SYSCALL_BRK: usize = 214;
 const SYSCALL_CLONE: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAIT4: usize = 260;
@@ -39,6 +40,7 @@ const SYSCALL_CONDVAR_WAIT: usize = 1032;
 
 mod errno;
 mod fs;
+mod memory;
 mod net;
 mod process;
 mod sync;
@@ -47,6 +49,7 @@ mod wait;
 
 use errno::{SysError, ret};
 use fs::*;
+use memory::*;
 use net::*;
 use process::*;
 use sync::*;
@@ -90,6 +93,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
         SYSCALL_GET_TIME => Ok(sys_get_time()),
         SYSCALL_GETPID => Ok(sys_getpid()),
+        SYSCALL_BRK => sys_brk(args[0]),
         SYSCALL_CLONE => sys_clone(args[0], args[1], args[2], args[3], args[4]),
         SYSCALL_EXEC => sys_exec(
             args[0] as *const u8,

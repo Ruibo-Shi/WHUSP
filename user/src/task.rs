@@ -27,6 +27,9 @@ pub fn get_time() -> isize {
 pub fn getpid() -> isize {
     sys_getpid()
 }
+pub fn brk(addr: usize) -> usize {
+    sys_brk(addr) as usize
+}
 pub fn fork() -> isize {
     let ret = sys_fork();
     if ret < 0 { -1 } else { ret }
