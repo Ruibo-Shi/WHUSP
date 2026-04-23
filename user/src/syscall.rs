@@ -13,6 +13,7 @@ const SYSCALL_GETDENTS64: usize = 61;
 const SYSCALL_READ: usize = 63;
 const SYSCALL_WRITE: usize = 64;
 const SYSCALL_EXIT: usize = 93;
+const SYSCALL_WAITID: usize = 95;
 const SYSCALL_SLEEP: usize = 101;
 const SYSCALL_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
@@ -20,7 +21,7 @@ const SYSCALL_GET_TIME: usize = 169;
 const SYSCALL_GETPID: usize = 172;
 const SYSCALL_CLONE: usize = 220;
 const SYSCALL_EXEC: usize = 221;
-const SYSCALL_WAITPID: usize = 260;
+const SYSCALL_WAIT4: usize = 260;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -35,6 +36,23 @@ const SYSCALL_CONDVAR_SIGNAL: usize = 1031;
 const SYSCALL_CONDVAR_WAIT: usize = 1032;
 
 const AT_FDCWD: isize = -100;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SigInfo {
+    pub si_signo: i32,
+    pub si_errno: i32,
+    pub si_code: i32,
+    pub si_trapno: i32,
+    pub si_pid: i32,
+    pub si_uid: u32,
+    pub si_status: i32,
+    pub si_utime: u32,
+    pub si_stime: u32,
+    pub si_value: u64,
+    pad: [u32; 20],
+    align: [u64; 0],
+}
 
 fn syscall(id: usize, args: [usize; 6]) -> isize {
     let mut ret: isize;
@@ -212,10 +230,37 @@ pub fn sys_execve(path: &str, args: &[*const u8], envs: &[*const u8]) -> isize {
     )
 }
 
-pub fn sys_waitpid(pid: isize, exit_code: *mut i32) -> isize {
+pub fn sys_wait4(pid: isize, status: *mut i32, options: i32, rusage: *mut u8) -> isize {
     syscall(
-        SYSCALL_WAITPID,
-        [pid as usize, exit_code as usize, 0, 0, 0, 0],
+        SYSCALL_WAIT4,
+        [
+            pid as usize,
+            status as usize,
+            options as usize,
+            rusage as usize,
+            0,
+            0,
+        ],
+    )
+}
+
+pub fn sys_waitid(
+    idtype: i32,
+    id: i32,
+    infop: *mut SigInfo,
+    options: i32,
+    rusage: *mut u8,
+) -> isize {
+    syscall(
+        SYSCALL_WAITID,
+        [
+            idtype as usize,
+            id as usize,
+            infop as usize,
+            options as usize,
+            rusage as usize,
+            0,
+        ],
     )
 }
 

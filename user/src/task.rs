@@ -1,5 +1,20 @@
 use super::*;
 
+const WAIT_PENDING: isize = -2;
+const WNOHANG: i32 = 1;
+pub const WEXITED: i32 = 4;
+pub const WNOWAIT: i32 = 0x01000000;
+pub const P_ALL: i32 = 0;
+pub const P_PID: i32 = 1;
+
+fn wait_exit_code(status: i32) -> i32 {
+    if status < 0 {
+        status
+    } else {
+        (status >> 8) & 0xff
+    }
+}
+
 pub fn exit(exit_code: i32) -> ! {
     sys_exit(exit_code);
 }
@@ -24,11 +39,15 @@ pub fn execve(path: &str, args: &[*const u8], envs: &[*const u8]) -> isize {
 
 pub fn wait(exit_code: &mut i32) -> isize {
     loop {
-        match sys_waitpid(-1, exit_code as *mut _) {
-            -2 => {
+        let mut status = 0;
+        match sys_wait4(-1, &mut status, WNOHANG, core::ptr::null_mut()) {
+            0 | WAIT_PENDING => {
                 yield_();
             }
-            // -1 or a real pid
+            exit_pid if exit_pid > 0 => {
+                *exit_code = wait_exit_code(status);
+                return exit_pid;
+            }
             exit_pid => return exit_pid,
         }
     }
@@ -36,18 +55,31 @@ pub fn wait(exit_code: &mut i32) -> isize {
 
 pub fn waitpid(pid: usize, exit_code: &mut i32) -> isize {
     loop {
-        match sys_waitpid(pid as isize, exit_code as *mut _) {
-            -2 => {
+        let mut status = 0;
+        match sys_wait4(pid as isize, &mut status, WNOHANG, core::ptr::null_mut()) {
+            0 | WAIT_PENDING => {
                 yield_();
             }
-            // -1 or a real pid
+            exit_pid if exit_pid > 0 => {
+                *exit_code = wait_exit_code(status);
+                return exit_pid;
+            }
             exit_pid => return exit_pid,
         }
     }
 }
 
 pub fn waitpid_nb(pid: usize, exit_code: &mut i32) -> isize {
-    sys_waitpid(pid as isize, exit_code as *mut _)
+    let mut status = 0;
+    let ret = sys_wait4(pid as isize, &mut status, WNOHANG, core::ptr::null_mut());
+    if ret > 0 {
+        *exit_code = wait_exit_code(status);
+    }
+    ret
+}
+
+pub fn waitid(idtype: i32, id: i32, infop: &mut SigInfo, options: i32) -> isize {
+    sys_waitid(idtype, id, infop as *mut _, options, core::ptr::null_mut())
 }
 
 bitflags! {

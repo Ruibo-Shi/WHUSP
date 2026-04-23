@@ -335,6 +335,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "waitid_smoke"
+path = "src/bin/waitid_smoke.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "usertests"
 path = "src/bin/usertests.rs"
 test = false
