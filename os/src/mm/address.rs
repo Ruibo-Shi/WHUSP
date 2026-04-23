@@ -114,6 +114,10 @@ impl VirtAddr {
         self.page_offset() == 0
     }
 }
+
+pub(crate) fn page_align_up(addr: usize) -> usize {
+    (addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
+}
 impl From<VirtAddr> for VirtPageNum {
     fn from(v: VirtAddr) -> Self {
         assert_eq!(v.page_offset(), 0);
