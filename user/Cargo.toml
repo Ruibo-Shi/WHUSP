@@ -89,6 +89,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "brk_smoke"
+path = "src/bin/brk_smoke.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "cmdline_args"
 path = "src/bin/cmdline_args.rs"
 test = false
