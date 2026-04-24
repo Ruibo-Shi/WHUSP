@@ -13,14 +13,34 @@ impl File for Stdin {
     fn writable(&self) -> bool {
         false
     }
-    fn read(&self, mut user_buf: UserBuffer) -> usize {
-        assert_eq!(user_buf.len(), 1);
-        //println!("before UART.read() in Stdin::read()");
-        let ch = UART.read();
-        unsafe {
-            user_buf.buffers[0].as_mut_ptr().write_volatile(ch);
+    fn read(&self, user_buf: UserBuffer) -> usize {
+        let want_to_read = user_buf.len();
+        if want_to_read == 0 {
+            return 0;
         }
-        1
+
+        let mut buf_iter = user_buf.into_iter();
+        let Some(byte_ref) = buf_iter.next() else {
+            return 0;
+        };
+        unsafe {
+            byte_ref.write_volatile(UART.read());
+        }
+
+        let mut already_read = 1usize;
+        while already_read < want_to_read {
+            let Some(ch) = UART.try_read() else {
+                break;
+            };
+            let Some(byte_ref) = buf_iter.next() else {
+                break;
+            };
+            unsafe {
+                byte_ref.write_volatile(ch);
+            }
+            already_read += 1;
+        }
+        already_read
     }
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
