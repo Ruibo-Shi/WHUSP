@@ -1,5 +1,5 @@
 use crate::fs::{
-    File, OpenFlags, S_IFCHR, S_IFDIR, WorkingDir, lookup_dir_at, make_pipe, mkdir_at,
+    File, OpenFlags, PollEvents, S_IFCHR, S_IFDIR, WorkingDir, lookup_dir_at, make_pipe, mkdir_at,
     normalize_path, open_file_at, stat_at, unlink_file_at,
 };
 use crate::mm::{
@@ -7,7 +7,8 @@ use crate::mm::{
     translated_str,
 };
 use crate::sync::UPIntrFreeCell;
-use crate::task::{current_process, current_user_token};
+use crate::task::{current_process, current_user_token, suspend_current_and_run_next};
+use crate::timer::get_time_ms;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::{MaybeUninit, size_of};
@@ -21,6 +22,7 @@ const AT_NO_AUTOMOUNT: i32 = 0x800;
 const AT_EMPTY_PATH: i32 = 0x1000;
 const VALID_FSTATAT_FLAGS: i32 = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH;
 const IOV_MAX: usize = 1024;
+const PPOLL_MAX_NFDS: usize = 4096;
 const TCGETS: usize = 0x5401;
 const TCSETS: usize = 0x5402;
 const TCSETSW: usize = 0x5403;
@@ -60,6 +62,8 @@ const VDISCARD: usize = 13;
 const VWERASE: usize = 14;
 const VLNEXT: usize = 15;
 const VEOL2: usize = 16;
+const NSEC_PER_SEC: isize = 1_000_000_000;
+const NSEC_PER_MSEC: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UserBufferAccess {
@@ -72,6 +76,21 @@ enum UserBufferAccess {
 pub struct LinuxIovec {
     base: usize,
     len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxPollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxTimeSpec {
+    tv_sec: isize,
+    tv_nsec: isize,
 }
 
 #[repr(C)]
@@ -316,6 +335,82 @@ fn read_user_iovecs(
     Ok(iovecs)
 }
 
+fn read_user_pollfds(
+    token: usize,
+    fds: *const LinuxPollFd,
+    nfds: usize,
+) -> SysResult<Vec<LinuxPollFd>> {
+    if nfds == 0 {
+        return Ok(Vec::new());
+    }
+    if fds.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    if nfds > PPOLL_MAX_NFDS {
+        return Err(SysError::EINVAL);
+    }
+    nfds.checked_mul(size_of::<LinuxPollFd>())
+        .ok_or(SysError::EINVAL)?;
+
+    let mut pollfds = Vec::with_capacity(nfds);
+    for index in 0..nfds {
+        let entry_addr = (fds as usize)
+            .checked_add(
+                index
+                    .checked_mul(size_of::<LinuxPollFd>())
+                    .ok_or(SysError::EFAULT)?,
+            )
+            .ok_or(SysError::EFAULT)?;
+        pollfds.push(read_user_value(token, entry_addr as *const LinuxPollFd)?);
+    }
+    Ok(pollfds)
+}
+
+fn write_user_pollfds(token: usize, fds: *mut LinuxPollFd, pollfds: &[LinuxPollFd]) -> SysResult {
+    for (index, pollfd) in pollfds.iter().enumerate() {
+        let entry_addr = (fds as usize)
+            .checked_add(
+                index
+                    .checked_mul(size_of::<LinuxPollFd>())
+                    .ok_or(SysError::EFAULT)?,
+            )
+            .ok_or(SysError::EFAULT)?;
+        write_user_value(token, entry_addr as *mut LinuxPollFd, pollfd)?;
+    }
+    Ok(0)
+}
+
+fn poll_events_from_user(events: i16) -> PollEvents {
+    PollEvents::from_bits_truncate(events as u16)
+}
+
+fn poll_events_to_user(events: PollEvents) -> i16 {
+    events.bits() as i16
+}
+
+fn timeout_deadline_ms(token: usize, timeout: *const LinuxTimeSpec) -> SysResult<Option<usize>> {
+    if timeout.is_null() {
+        return Ok(None);
+    }
+    let timeout = read_user_value(token, timeout)?;
+    if timeout.tv_sec < 0 || !(0..NSEC_PER_SEC).contains(&timeout.tv_nsec) {
+        return Err(SysError::EINVAL);
+    }
+    let sec_ms = (timeout.tv_sec as usize)
+        .checked_mul(1000)
+        .ok_or(SysError::EINVAL)?;
+    let nsec_ms = if timeout.tv_nsec == 0 {
+        0
+    } else {
+        ((timeout.tv_nsec as usize) + NSEC_PER_MSEC - 1) / NSEC_PER_MSEC
+    };
+    let timeout_ms = sec_ms.checked_add(nsec_ms).ok_or(SysError::EINVAL)?;
+    let deadline_ms = get_time_ms()
+        .checked_add(timeout_ms)
+        .ok_or(SysError::EINVAL)?;
+    Ok(Some(deadline_ms))
+}
+
 fn dirfd_base(dirfd: isize) -> SysResult<WorkingDir> {
     if dirfd == AT_FDCWD {
         return Ok(current_process().working_dir());
@@ -388,6 +483,36 @@ fn stat_by_dirfd(dirfd: isize) -> SysResult<crate::fs::FileStat> {
 fn is_console_tty(file: &Arc<dyn File + Send + Sync>) -> bool {
     let stat = file.stat();
     stat.mode & S_IFCHR == S_IFCHR
+}
+
+fn scan_pollfds(pollfds: &mut [LinuxPollFd]) -> usize {
+    let mut ready = 0usize;
+    for pollfd in pollfds.iter_mut() {
+        pollfd.revents = 0;
+        if pollfd.fd < 0 {
+            continue;
+        }
+
+        let events = poll_events_from_user(pollfd.events);
+        match get_file_by_fd(pollfd.fd as usize) {
+            Ok(file) => {
+                let revents = file.poll(events);
+                pollfd.revents = poll_events_to_user(revents);
+                if !revents.is_empty() {
+                    ready += 1;
+                }
+            }
+            Err(SysError::EBADF) => {
+                pollfd.revents = poll_events_to_user(PollEvents::POLLNVAL);
+                ready += 1;
+            }
+            Err(_) => {
+                pollfd.revents = poll_events_to_user(PollEvents::POLLERR);
+                ready += 1;
+            }
+        }
+    }
+    ready
 }
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> SysResult {
@@ -530,6 +655,38 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> SysResult {
         Ok(file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize)
     } else {
         Err(SysError::EBADF)
+    }
+}
+
+pub fn sys_ppoll(
+    fds: *mut LinuxPollFd,
+    nfds: usize,
+    timeout: *const LinuxTimeSpec,
+    sigmask: *const u8,
+    _sigsetsize: usize,
+) -> SysResult {
+    // UNFINISHED: ppoll currently ignores per-call signal-mask installation and EINTR wakeups.
+    if !sigmask.is_null() {
+        return Err(SysError::ENOSYS);
+    }
+
+    let token = current_user_token();
+    let mut pollfds = read_user_pollfds(token, fds.cast_const(), nfds)?;
+    let deadline_ms = timeout_deadline_ms(token, timeout)?;
+
+    loop {
+        let ready = scan_pollfds(&mut pollfds);
+        if ready > 0 {
+            write_user_pollfds(token, fds, &pollfds)?;
+            return Ok(ready as isize);
+        }
+        if let Some(deadline_ms) = deadline_ms {
+            if get_time_ms() >= deadline_ms {
+                write_user_pollfds(token, fds, &pollfds)?;
+                return Ok(0);
+            }
+        }
+        suspend_current_and_run_next();
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{File, FileStat, S_IFIFO};
+use super::{File, FileStat, PollEvents, S_IFIFO};
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
 use alloc::sync::{Arc, Weak};
@@ -42,6 +42,7 @@ pub struct PipeRingBuffer {
     head: usize,
     tail: usize,
     status: RingBufferStatus,
+    read_end: Option<Weak<Pipe>>,
     write_end: Option<Weak<Pipe>>,
 }
 
@@ -52,8 +53,12 @@ impl PipeRingBuffer {
             head: 0,
             tail: 0,
             status: RingBufferStatus::Empty,
+            read_end: None,
             write_end: None,
         }
+    }
+    pub fn set_read_end(&mut self, read_end: &Arc<Pipe>) {
+        self.read_end = Some(Arc::downgrade(read_end));
     }
     pub fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
         self.write_end = Some(Arc::downgrade(write_end));
@@ -92,7 +97,16 @@ impl PipeRingBuffer {
         }
     }
     pub fn all_write_ends_closed(&self) -> bool {
-        self.write_end.as_ref().unwrap().upgrade().is_none()
+        match &self.write_end {
+            Some(write_end) => write_end.upgrade().is_none(),
+            None => true,
+        }
+    }
+    pub fn all_read_ends_closed(&self) -> bool {
+        match &self.read_end {
+            Some(read_end) => read_end.upgrade().is_none(),
+            None => true,
+        }
     }
 }
 
@@ -101,7 +115,9 @@ pub fn make_pipe() -> (Arc<Pipe>, Arc<Pipe>) {
     let buffer = Arc::new(unsafe { UPIntrFreeCell::new(PipeRingBuffer::new()) });
     let read_end = Arc::new(Pipe::read_end_with_buffer(buffer.clone()));
     let write_end = Arc::new(Pipe::write_end_with_buffer(buffer.clone()));
-    buffer.exclusive_access().set_write_end(&write_end);
+    let mut inner = buffer.exclusive_access();
+    inner.set_read_end(&read_end);
+    inner.set_write_end(&write_end);
     (read_end, write_end)
 }
 
@@ -172,5 +188,30 @@ impl File for Pipe {
     }
     fn stat(&self) -> FileStat {
         FileStat::with_mode(S_IFIFO | 0o600)
+    }
+    fn poll(&self, events: PollEvents) -> PollEvents {
+        let ring_buffer = self.buffer.exclusive_access();
+        let mut ready = PollEvents::empty();
+        if self.readable {
+            let has_data = ring_buffer.available_read() > 0;
+            let hangup = ring_buffer.all_write_ends_closed();
+            if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI) && (has_data || hangup) {
+                ready |= PollEvents::POLLIN;
+            }
+            if hangup {
+                ready |= PollEvents::POLLHUP;
+            }
+        }
+        if self.writable {
+            let can_write = ring_buffer.available_write() > 0;
+            let peer_closed = ring_buffer.all_read_ends_closed();
+            if events.contains(PollEvents::POLLOUT) && (can_write || peer_closed) {
+                ready |= PollEvents::POLLOUT;
+            }
+            if peer_closed {
+                ready |= PollEvents::POLLERR;
+            }
+        }
+        ready
     }
 }
