@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(alloc_error_handler)]
 
-use crate::drivers::{GPU_DEVICE, KEYBOARD_DEVICE, MOUSE_DEVICE};
+use crate::drivers::{KEYBOARD_DEVICE, MOUSE_DEVICE};
 extern crate alloc;
 
 #[macro_use]
@@ -75,7 +75,7 @@ pub extern "C" fn rust_main(hart_id: usize, dtb_addr: usize) -> ! {
         board::plic_base(),
     );
 
-    if let Some(_gpu) = GPU_DEVICE.as_ref() {
+    if board::gpu_device().is_some() {
         info!("KERN: init gpu");
     } else {
         info!("KERN: gpu device unavailable");
