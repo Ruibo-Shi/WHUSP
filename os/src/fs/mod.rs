@@ -11,6 +11,7 @@ const DEFAULT_BLOCK_SIZE: u32 = 4096;
 
 pub const S_IFIFO: u32 = 0o010000;
 pub const S_IFCHR: u32 = 0o020000;
+pub const S_IFDIR: u32 = 0o040000;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileStat {

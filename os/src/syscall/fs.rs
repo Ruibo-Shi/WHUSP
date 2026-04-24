@@ -1,6 +1,6 @@
 use crate::fs::{
-    File, OpenFlags, WorkingDir, lookup_dir_at, make_pipe, mkdir_at, normalize_path, open_file_at,
-    stat_at, unlink_file_at,
+    File, OpenFlags, S_IFDIR, WorkingDir, lookup_dir_at, make_pipe, mkdir_at, normalize_path,
+    open_file_at, stat_at, unlink_file_at,
 };
 use crate::mm::{
     PageTable, StepByOne, UserBuffer, VirtAddr, translated_byte_buffer, translated_refmut,
@@ -19,6 +19,12 @@ const AT_NO_AUTOMOUNT: i32 = 0x800;
 const AT_EMPTY_PATH: i32 = 0x1000;
 const VALID_FSTATAT_FLAGS: i32 = AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH;
 const IOV_MAX: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UserBufferAccess {
+    Read,
+    Write,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -82,6 +88,7 @@ fn translated_byte_buffer_checked(
     token: usize,
     ptr: *const u8,
     len: usize,
+    access: UserBufferAccess,
 ) -> SysResult<Vec<&'static mut [u8]>> {
     if len == 0 {
         return Ok(Vec::new());
@@ -94,7 +101,11 @@ fn translated_byte_buffer_checked(
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
         let pte = page_table.translate(vpn).ok_or(SysError::EFAULT)?;
-        if !pte.is_valid() || !pte.readable() {
+        let permitted = match access {
+            UserBufferAccess::Read => pte.readable(),
+            UserBufferAccess::Write => pte.writable(),
+        };
+        if !pte.is_valid() || !permitted {
             return Err(SysError::EFAULT);
         }
         let ppn = pte.ppn();
@@ -113,7 +124,12 @@ fn translated_byte_buffer_checked(
 
 fn read_user_usize(token: usize, addr: usize) -> SysResult<usize> {
     let mut bytes = [0u8; size_of::<usize>()];
-    let buffers = translated_byte_buffer_checked(token, addr as *const u8, bytes.len())?;
+    let buffers = translated_byte_buffer_checked(
+        token,
+        addr as *const u8,
+        bytes.len(),
+        UserBufferAccess::Read,
+    )?;
     let mut copied = 0usize;
     for buffer in buffers.iter() {
         let next = copied + buffer.len();
@@ -266,12 +282,16 @@ pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult
         if iovec.len == 0 {
             continue;
         }
-        let buffers =
-            match translated_byte_buffer_checked(token, iovec.base as *const u8, iovec.len) {
-                Ok(buffers) => buffers,
-                Err(_) if total_written > 0 => return Ok(total_written as isize),
-                Err(err) => return Err(err),
-            };
+        let buffers = match translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Read,
+        ) {
+            Ok(buffers) => buffers,
+            Err(_) if total_written > 0 => return Ok(total_written as isize),
+            Err(err) => return Err(err),
+        };
         let written = file.write(UserBuffer::new(buffers));
         total_written += written;
         if written < iovec.len {
@@ -279,6 +299,59 @@ pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult
         }
     }
     Ok(total_written as isize)
+}
+
+pub fn sys_readv(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult {
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    if iovcnt > IOV_MAX {
+        return Err(SysError::EINVAL);
+    }
+    if iov.is_null() {
+        return Err(SysError::EFAULT);
+    }
+
+    let token = current_user_token();
+    let iovecs = read_user_iovecs(token, iov, iovcnt)?;
+    let file = get_file_by_fd(fd)?;
+    if !file.readable() {
+        return Err(SysError::EBADF);
+    }
+    if file.stat().mode & S_IFDIR == S_IFDIR {
+        return Err(SysError::EISDIR);
+    }
+
+    for iovec in iovecs.iter() {
+        if iovec.len == 0 {
+            continue;
+        }
+        translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Write,
+        )?;
+    }
+
+    let mut total_read = 0usize;
+    for iovec in iovecs {
+        if iovec.len == 0 {
+            continue;
+        }
+        let buffers = translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Write,
+        )?;
+        let read = file.read(UserBuffer::new(buffers));
+        total_read += read;
+        if read < iovec.len {
+            break;
+        }
+    }
+    Ok(total_read as isize)
 }
 
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> SysResult {
