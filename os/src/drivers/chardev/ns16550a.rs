@@ -139,6 +139,10 @@ impl CharDevice for NS16550a {
         let mut inner = self.inner.exclusive_access();
         inner.read_buffer.pop_front()
     }
+    fn has_input(&self) -> bool {
+        let inner = self.inner.exclusive_access();
+        !inner.read_buffer.is_empty()
+    }
     fn write(&self, ch: u8) {
         let mut inner = self.inner.exclusive_access();
         inner.ns16550a.write(ch);

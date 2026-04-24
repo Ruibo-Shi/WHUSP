@@ -1,4 +1,4 @@
-use super::{File, FileStat, S_IFCHR};
+use super::{File, FileStat, PollEvents, S_IFCHR};
 use crate::drivers::chardev::CharDevice;
 use crate::drivers::chardev::UART;
 use crate::mm::UserBuffer;
@@ -45,6 +45,13 @@ impl File for Stdin {
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
     }
+    fn poll(&self, events: PollEvents) -> PollEvents {
+        if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI) && UART.has_input() {
+            PollEvents::POLLIN
+        } else {
+            PollEvents::empty()
+        }
+    }
     fn stat(&self) -> FileStat {
         FileStat::with_mode(S_IFCHR | 0o666)
     }
@@ -65,6 +72,13 @@ impl File for Stdout {
             print!("{}", core::str::from_utf8(*buffer).unwrap());
         }
         user_buf.len()
+    }
+    fn poll(&self, events: PollEvents) -> PollEvents {
+        if events.contains(PollEvents::POLLOUT) {
+            PollEvents::POLLOUT
+        } else {
+            PollEvents::empty()
+        }
     }
     fn stat(&self) -> FileStat {
         FileStat::with_mode(S_IFCHR | 0o666)

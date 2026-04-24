@@ -6,12 +6,26 @@ mod pipe;
 mod stdio;
 
 use crate::mm::UserBuffer;
+use bitflags::bitflags;
 
 const DEFAULT_BLOCK_SIZE: u32 = 4096;
 
 pub const S_IFIFO: u32 = 0o010000;
 pub const S_IFCHR: u32 = 0o020000;
 pub const S_IFDIR: u32 = 0o040000;
+
+bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PollEvents: u16 {
+        const POLLIN = 0x0001;
+        const POLLPRI = 0x0002;
+        const POLLOUT = 0x0004;
+        const POLLERR = 0x0008;
+        const POLLHUP = 0x0010;
+        const POLLNVAL = 0x0020;
+        const POLLRDHUP = 0x2000;
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileStat {
@@ -49,6 +63,18 @@ pub trait File: Send + Sync {
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
     fn write(&self, buf: UserBuffer) -> usize;
+    fn poll(&self, events: PollEvents) -> PollEvents {
+        let mut ready = PollEvents::empty();
+        if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI | PollEvents::POLLRDHUP)
+            && self.readable()
+        {
+            ready |= PollEvents::POLLIN;
+        }
+        if events.contains(PollEvents::POLLOUT) && self.writable() {
+            ready |= PollEvents::POLLOUT;
+        }
+        ready
+    }
     fn stat(&self) -> FileStat {
         FileStat::default()
     }

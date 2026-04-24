@@ -9,6 +9,7 @@ pub trait CharDevice {
     fn init(&self);
     fn read(&self) -> u8;
     fn try_read(&self) -> Option<u8>;
+    fn has_input(&self) -> bool;
     fn write(&self, ch: u8);
     fn handle_irq(&self);
 }
