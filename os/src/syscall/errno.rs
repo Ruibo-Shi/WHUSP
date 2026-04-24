@@ -15,6 +15,7 @@ pub enum SysError {
     EACCES = 13,
     EFAULT = 14,
     ENOTDIR = 20,
+    EISDIR = 21,
     EINVAL = 22,
     ENOSYS = 38,
     ENOTEMPTY = 39,
