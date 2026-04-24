@@ -1,8 +1,6 @@
 const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_DUP: usize = 24;
-const SYSCALL_CONNECT: usize = 29;
-const SYSCALL_LISTEN: usize = 30;
-const SYSCALL_ACCEPT: usize = 31;
+const SYSCALL_IOCTL: usize = 29;
 const SYSCALL_MKDIRAT: usize = 34;
 const SYSCALL_UNLINKAT: usize = 35;
 const SYSCALL_CHDIR: usize = 49;
@@ -31,6 +29,9 @@ const SYSCALL_MMAP: usize = 222;
 const SYSCALL_WAIT4: usize = 260;
 
 // TODO: remove or unify these syscalls
+const SYSCALL_NET_CONNECT: usize = 2000;
+const SYSCALL_NET_LISTEN: usize = 2001;
+const SYSCALL_NET_ACCEPT: usize = 2002;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -70,9 +71,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     ret(match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1]),
         SYSCALL_DUP => sys_dup(args[0]),
-        SYSCALL_CONNECT => Ok(sys_connect(args[0] as _, args[1] as _, args[2] as _)),
-        SYSCALL_LISTEN => Ok(sys_listen(args[0] as _)),
-        SYSCALL_ACCEPT => Ok(sys_accept(args[0] as _)),
+        SYSCALL_IOCTL => sys_ioctl(args[0], args[1], args[2]),
         SYSCALL_MKDIRAT => sys_mkdirat(args[0] as isize, args[1] as *const u8, args[2] as u32),
         SYSCALL_UNLINKAT => sys_unlinkat(args[0] as isize, args[1] as *const u8, args[2] as u32),
         SYSCALL_CHDIR => sys_chdir(args[0] as *const u8),
@@ -123,6 +122,9 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as i32,
             args[3] as *mut RUsage,
         ),
+        SYSCALL_NET_CONNECT => Ok(sys_connect(args[0] as _, args[1] as _, args[2] as _)),
+        SYSCALL_NET_LISTEN => Ok(sys_listen(args[0] as _)),
+        SYSCALL_NET_ACCEPT => Ok(sys_accept(args[0] as _)),
         SYSCALL_THREAD_CREATE => Ok(sys_thread_create(args[0], args[1])),
         SYSCALL_GETTID => Ok(sys_gettid()),
         SYSCALL_WAITTID => Ok(sys_waittid(args[0]) as isize),
