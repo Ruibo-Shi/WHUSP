@@ -14,8 +14,6 @@ volatile = "0.6.1"
 virtio-drivers = "0.13.0"
 lose-net-stack = { git = "https://github.com/yfblock/lose-net-stack", rev = "1a73a861bb9b" }
 lwext4_rust = { path = "../vendor/lwext4_rust", default-features = false }
-embedded-graphics = "0.8.2"
-tinybmp = "0.7.0"
 log = "0.4"
 sbi-rt = { version = "0.0.3", features = ["legacy"] }
 fdt = "0.1.5"

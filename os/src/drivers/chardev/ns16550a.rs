@@ -114,11 +114,6 @@ impl NS16550a {
             condvar: Condvar::new(),
         }
     }
-
-    pub fn read_buffer_is_empty(&self) -> bool {
-        self.inner
-            .exclusive_session(|inner| inner.read_buffer.is_empty())
-    }
 }
 
 impl CharDevice for NS16550a {
