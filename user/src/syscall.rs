@@ -1,8 +1,6 @@
 const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_DUP: usize = 24;
-const SYSCALL_CONNECT: usize = 29;
-const SYSCALL_LISTEN: usize = 30;
-const SYSCALL_ACCEPT: usize = 31;
+const SYSCALL_IOCTL: usize = 29;
 const SYSCALL_MKDIRAT: usize = 34;
 const SYSCALL_UNLINKAT: usize = 35;
 const SYSCALL_CHDIR: usize = 49;
@@ -23,6 +21,9 @@ const SYSCALL_BRK: usize = 214;
 const SYSCALL_CLONE: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAIT4: usize = 260;
+const SYSCALL_NET_CONNECT: usize = 2000;
+const SYSCALL_NET_LISTEN: usize = 2001;
+const SYSCALL_NET_ACCEPT: usize = 2002;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -76,20 +77,24 @@ pub fn sys_dup(fd: usize) -> isize {
     syscall(SYSCALL_DUP, [fd, 0, 0, 0, 0, 0])
 }
 
+pub fn sys_ioctl(fd: usize, request: usize, argp: usize) -> isize {
+    syscall(SYSCALL_IOCTL, [fd, request, argp, 0, 0, 0])
+}
+
 pub fn sys_connect(dest: u32, sport: u16, dport: u16) -> isize {
     syscall(
-        SYSCALL_CONNECT,
+        SYSCALL_NET_CONNECT,
         [dest as usize, sport as usize, dport as usize, 0, 0, 0],
     )
 }
 
 // just listen for tcp connections now
 pub fn sys_listen(sport: u16) -> isize {
-    syscall(SYSCALL_LISTEN, [sport as usize, 0, 0, 0, 0, 0])
+    syscall(SYSCALL_NET_LISTEN, [sport as usize, 0, 0, 0, 0, 0])
 }
 
 pub fn sys_accept(socket_fd: usize) -> isize {
-    syscall(SYSCALL_ACCEPT, [socket_fd, 0, 0, 0, 0, 0])
+    syscall(SYSCALL_NET_ACCEPT, [socket_fd, 0, 0, 0, 0, 0])
 }
 
 pub fn sys_open(path: &str, flags: u32) -> isize {

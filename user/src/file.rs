@@ -20,6 +20,9 @@ fn compat_ret(ret: isize) -> isize {
 pub fn dup(fd: usize) -> isize {
     compat_ret(sys_dup(fd))
 }
+pub fn ioctl(fd: usize, request: usize, argp: usize) -> isize {
+    compat_ret(sys_ioctl(fd, request, argp))
+}
 pub fn open(path: &str, flags: OpenFlags) -> isize {
     compat_ret(sys_open(path, flags.bits))
 }
