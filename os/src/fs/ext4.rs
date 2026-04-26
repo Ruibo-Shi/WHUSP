@@ -104,52 +104,14 @@ impl Ext4Mount {
         })
     }
 
-    pub(super) fn lookup_path_from(
+    pub(super) fn lookup_component_from(
         &mut self,
-        start_ino: u32,
-        relpath: &str,
+        parent_ino: u32,
+        component: &str,
     ) -> Option<(u32, FsNodeKind)> {
-        if relpath.is_empty() {
-            return Some((start_ino, FsNodeKind::Directory));
-        }
-
-        let mut ino = start_ino;
-        let mut kind = FsNodeKind::Directory;
-        for component in relpath
-            .split('/')
-            .filter(|component| !component.is_empty() && *component != ".")
-        {
-            if component == ".." {
-                return None;
-            }
-            let mut result = self.fs.lookup(ino, component).ok()?;
-            let entry = result.entry();
-            ino = entry.ino();
-            kind = into_node_kind(entry.inode_type());
-        }
-        Some((ino, kind))
-    }
-
-    pub(super) fn resolve_parent_from<'a>(
-        &mut self,
-        start_ino: u32,
-        relpath: &'a str,
-    ) -> Option<(u32, &'a str)> {
-        if relpath.is_empty() {
-            return None;
-        }
-        let (parent_path, leaf_name) = match relpath.rsplit_once('/') {
-            Some((parent_path, leaf_name)) => (parent_path, leaf_name),
-            None => ("", relpath),
-        };
-        if leaf_name.is_empty() || leaf_name == "." || leaf_name == ".." {
-            return None;
-        }
-        let (parent_ino, kind) = self.lookup_path_from(start_ino, parent_path)?;
-        if kind != FsNodeKind::Directory {
-            return None;
-        }
-        Some((parent_ino, leaf_name))
+        let mut result = self.fs.lookup(parent_ino, component).ok()?;
+        let entry = result.entry();
+        Some((entry.ino(), into_node_kind(entry.inode_type())))
     }
 
     pub(super) fn create_file(&mut self, parent_ino: u32, leaf_name: &str) -> Option<u32> {
