@@ -148,7 +148,19 @@ impl ProcessControlBlock {
         };
         let new_token = memory_set.token();
 
-        self.inner_exclusive_access().memory_set = memory_set;
+        {
+            let mut inner = self.inner_exclusive_access();
+            inner.memory_set = memory_set;
+            for fd in inner.fd_table.iter_mut() {
+                if fd
+                    .as_ref()
+                    .map(|entry| entry.close_on_exec())
+                    .unwrap_or(false)
+                {
+                    *fd = None;
+                }
+            }
+        }
 
         let task = self.inner_exclusive_access().get_task(0);
         let mut task_inner = task.inner_exclusive_access();

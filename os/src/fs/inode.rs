@@ -57,7 +57,7 @@ impl OSInode {
     }
 }
 
-// TODO: more flags to implemnent
+// TODO: add remaining Linux open flags as syscall coverage needs them.
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct OpenFlags: u32 {
@@ -67,6 +67,9 @@ bitflags! {
         const CREATE = 0o100;
         const NOCTTY = 0o400;
         const TRUNC = 0o1000;
+        const APPEND = 0o2000;
+        const NONBLOCK = 0o4000;
+        const DIRECT = 0o40000;
         const LARGEFILE = 0o100000;
         const DIRECTORY = 0o200000;
         const CLOEXEC = 0o2000000;
@@ -75,6 +78,8 @@ bitflags! {
 
 impl OpenFlags {
     const ACCESS_MODE_MASK: u32 = 0b11;
+    const FCNTL_MUTABLE_STATUS_MASK: u32 =
+        OpenFlags::APPEND.bits() | OpenFlags::NONBLOCK.bits() | OpenFlags::DIRECT.bits();
 
     pub fn read_write(&self) -> (bool, bool) {
         match self.bits() & Self::ACCESS_MODE_MASK {
@@ -91,6 +96,18 @@ impl OpenFlags {
 
     pub fn can_open_directory(&self) -> bool {
         !self.writable_target() && !self.contains(Self::CREATE) && !self.contains(Self::TRUNC)
+    }
+
+    pub fn file_status_flags(flags: Self) -> Self {
+        Self::from_bits_truncate(
+            flags.bits() & (Self::ACCESS_MODE_MASK | Self::FCNTL_MUTABLE_STATUS_MASK),
+        )
+    }
+
+    pub fn with_fcntl_status_flags(self, flags: u32) -> Self {
+        let preserved = self.bits() & !Self::FCNTL_MUTABLE_STATUS_MASK;
+        let updated = flags & Self::FCNTL_MUTABLE_STATUS_MASK;
+        Self::from_bits_truncate(preserved | updated)
     }
 }
 
@@ -231,6 +248,29 @@ impl File for OSInode {
             return 0;
         }
         let mut inner = self.inner.exclusive_access();
+        let mut total_write_size = 0usize;
+        for slice in buf.buffers.iter() {
+            let write_size = with_mount(inner.mount_id, |mount| {
+                mount.write_at(inner.ino, slice, inner.offset as u64)
+            })
+            .expect("filesystem mount is missing");
+            inner.offset += write_size;
+            total_write_size += write_size;
+        }
+        total_write_size
+    }
+
+    fn write_append(&self, buf: UserBuffer) -> usize {
+        if self.kind == FsNodeKind::Directory {
+            return 0;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let Some(stat) = with_mount(inner.mount_id, |mount| mount.stat(inner.ino))
+            .expect("filesystem mount is missing")
+        else {
+            return 0;
+        };
+        inner.offset = stat.size as usize;
         let mut total_write_size = 0usize;
         for slice in buf.buffers.iter() {
             let write_size = with_mount(inner.mount_id, |mount| {

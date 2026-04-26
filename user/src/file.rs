@@ -7,8 +7,38 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREATE = 0o100;
         const TRUNC = 0o1000;
+        const APPEND = 0o2000;
+        const NONBLOCK = 0o4000;
+        const DIRECT = 0o40000;
         const DIRECTORY = 0o200000;
+        const CLOEXEC = 0o2000000;
     }
+}
+
+pub const F_DUPFD: usize = 0;
+pub const F_GETFD: usize = 1;
+pub const F_SETFD: usize = 2;
+pub const F_GETFL: usize = 3;
+pub const F_SETFL: usize = 4;
+pub const F_GETLK: usize = 5;
+pub const F_SETLK: usize = 6;
+pub const F_SETLKW: usize = 7;
+pub const F_DUPFD_CLOEXEC: usize = 1030;
+
+pub const FD_CLOEXEC: usize = 1;
+
+pub const F_RDLCK: i16 = 0;
+pub const F_WRLCK: i16 = 1;
+pub const F_UNLCK: i16 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Flock {
+    pub l_type: i16,
+    pub l_whence: i16,
+    pub l_start: i64,
+    pub l_len: i64,
+    pub l_pid: i32,
 }
 
 const AT_FDCWD: isize = -100;
@@ -19,6 +49,9 @@ fn compat_ret(ret: isize) -> isize {
 
 pub fn dup(fd: usize) -> isize {
     compat_ret(sys_dup(fd))
+}
+pub fn fcntl(fd: usize, op: usize, arg: usize) -> isize {
+    compat_ret(sys_fcntl(fd, op, arg))
 }
 pub fn ioctl(fd: usize, request: usize, argp: usize) -> isize {
     compat_ret(sys_ioctl(fd, request, argp))

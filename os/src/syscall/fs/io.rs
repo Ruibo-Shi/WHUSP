@@ -1,11 +1,11 @@
-use crate::fs::S_IFDIR;
+use crate::fs::{OpenFlags, PollEvents, S_IFDIR};
 use crate::mm::{UserBuffer, translated_byte_buffer};
-use crate::task::{current_process, current_user_token};
+use crate::task::{FdTableEntry, current_user_token};
 use alloc::vec::Vec;
 use core::mem::size_of;
 
 use super::super::errno::{SysError, SysResult};
-use super::fd::get_file_by_fd;
+use super::fd::{get_fd_entry_by_fd, get_file_by_fd};
 use super::uapi::{IOV_MAX, LinuxIovec};
 use super::user_ptr::{UserBufferAccess, read_user_usize, translated_byte_buffer_checked};
 
@@ -32,24 +32,39 @@ fn read_user_iovecs(
     Ok(iovecs)
 }
 
+fn ensure_nonblocking_ready(entry: &FdTableEntry, events: PollEvents) -> SysResult<()> {
+    if !entry.status_flags().contains(OpenFlags::NONBLOCK) {
+        return Ok(());
+    }
+    let file = entry.file();
+    if file.poll(events).intersects(events) {
+        Ok(())
+    } else {
+        Err(SysError::EAGAIN)
+    }
+}
+
+fn write_with_status_flags(entry: &FdTableEntry, buf: UserBuffer) -> usize {
+    let file = entry.file();
+    if entry.status_flags().contains(OpenFlags::APPEND) {
+        file.write_append(buf)
+    } else {
+        file.write(buf)
+    }
+}
+
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> SysResult {
     let token = current_user_token();
-    let process = current_process();
-    let inner = process.inner_exclusive_access();
-    if fd >= inner.fd_table.len() {
+    let entry = get_fd_entry_by_fd(fd)?;
+    let file = entry.file();
+    if !file.writable() {
         return Err(SysError::EBADF);
     }
-    if let Some(file) = &inner.fd_table[fd] {
-        if !file.writable() {
-            return Err(SysError::EBADF);
-        }
-        let file = file.clone();
-        // release current task TCB manually to avoid multi-borrow
-        drop(inner);
-        Ok(file.write(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize)
-    } else {
-        Err(SysError::EBADF)
-    }
+    ensure_nonblocking_ready(&entry, PollEvents::POLLOUT)?;
+    Ok(write_with_status_flags(
+        &entry,
+        UserBuffer::new(translated_byte_buffer(token, buf, len)),
+    ) as isize)
 }
 
 pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult {
@@ -65,18 +80,12 @@ pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult
 
     let token = current_user_token();
     let iovecs = read_user_iovecs(token, iov, iovcnt)?;
-    let process = current_process();
-    let inner = process.inner_exclusive_access();
-    if fd >= inner.fd_table.len() {
-        return Err(SysError::EBADF);
-    }
-    let Some(file) = inner.fd_table[fd].as_ref().cloned() else {
-        return Err(SysError::EBADF);
-    };
+    let entry = get_fd_entry_by_fd(fd)?;
+    let file = entry.file();
     if !file.writable() {
         return Err(SysError::EBADF);
     }
-    drop(inner);
+    ensure_nonblocking_ready(&entry, PollEvents::POLLOUT)?;
 
     let mut total_written = 0usize;
     for iovec in iovecs {
@@ -93,7 +102,7 @@ pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult
             Err(_) if total_written > 0 => return Ok(total_written as isize),
             Err(err) => return Err(err),
         };
-        let written = file.write(UserBuffer::new(buffers));
+        let written = write_with_status_flags(&entry, UserBuffer::new(buffers));
         total_written += written;
         if written < iovec.len {
             break;
@@ -122,6 +131,8 @@ pub fn sys_readv(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult 
     if file.stat().mode & S_IFDIR == S_IFDIR {
         return Err(SysError::EISDIR);
     }
+    let entry = get_fd_entry_by_fd(fd)?;
+    ensure_nonblocking_ready(&entry, PollEvents::POLLIN)?;
 
     for iovec in iovecs.iter() {
         if iovec.len == 0 {
@@ -157,20 +168,11 @@ pub fn sys_readv(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult 
 
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> SysResult {
     let token = current_user_token();
-    let process = current_process();
-    let inner = process.inner_exclusive_access();
-    if fd >= inner.fd_table.len() {
+    let entry = get_fd_entry_by_fd(fd)?;
+    let file = entry.file();
+    if !file.readable() {
         return Err(SysError::EBADF);
     }
-    if let Some(file) = &inner.fd_table[fd] {
-        let file = file.clone();
-        if !file.readable() {
-            return Err(SysError::EBADF);
-        }
-        // release current task TCB manually to avoid multi-borrow
-        drop(inner);
-        Ok(file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize)
-    } else {
-        Err(SysError::EBADF)
-    }
+    ensure_nonblocking_ready(&entry, PollEvents::POLLIN)?;
+    Ok(file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize)
 }

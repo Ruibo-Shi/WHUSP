@@ -1,8 +1,10 @@
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
 use super::process::{ProcessControlBlock, ProcessControlBlockInner};
-use super::{CloneArgs, CloneFlags, SignalFlags, TaskControlBlock, add_task, pid_alloc};
-use crate::fs::{File, Stdin, Stdout, WorkingDir};
+use super::{
+    CloneArgs, CloneFlags, FdTableEntry, SignalFlags, TaskControlBlock, add_task, pid_alloc,
+};
+use crate::fs::{OpenFlags, Stdin, Stdout, WorkingDir};
 use crate::mm::{ElfLoadInfo, KERNEL_SPACE, MemorySet};
 use crate::sync::UPIntrFreeCell;
 use crate::trap::{TrapContext, trap_handler};
@@ -59,9 +61,9 @@ impl ProcessControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: vec![
-                        Some(Arc::new(Stdin)),
-                        Some(Arc::new(Stdout)),
-                        Some(Arc::new(Stdout)),
+                        Some(FdTableEntry::from_file(Arc::new(Stdin), OpenFlags::RDONLY)),
+                        Some(FdTableEntry::from_file(Arc::new(Stdout), OpenFlags::WRONLY)),
+                        Some(FdTableEntry::from_file(Arc::new(Stdout), OpenFlags::WRONLY)),
                     ],
                     signals: SignalFlags::empty(),
                     tasks: Vec::new(),
@@ -105,14 +107,7 @@ impl ProcessControlBlock {
         assert_eq!(parent.thread_count(), 1);
         let memory_set = MemorySet::from_existed_user(&parent.memory_set);
         let pid = pid_alloc();
-        let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
-        for fd in parent.fd_table.iter() {
-            if let Some(file) = fd {
-                new_fd_table.push(Some(file.clone()));
-            } else {
-                new_fd_table.push(None);
-            }
-        }
+        let new_fd_table = parent.fd_table.clone();
 
         let child = Arc::new(Self {
             pid,
