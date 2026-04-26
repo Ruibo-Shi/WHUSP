@@ -52,8 +52,45 @@ pub(super) enum ResolvedOpen<'a> {
     Create(CreateTarget<'a>),
 }
 
-fn is_bare_name(path: &str) -> bool {
-    !path.is_empty() && !path.starts_with('/') && !path.contains('/')
+#[derive(Clone, Copy, Debug)]
+struct PathCursor {
+    mount_id: MountId,
+    ino: u32,
+    kind: FsNodeKind,
+}
+
+impl PathCursor {
+    fn root() -> Self {
+        Self {
+            mount_id: primary_mount_id(),
+            ino: EXT4_ROOT_INO,
+            kind: FsNodeKind::Directory,
+        }
+    }
+
+    fn from_working_dir(cwd: WorkingDir) -> Self {
+        Self {
+            mount_id: cwd.mount_id(),
+            ino: cwd.ino(),
+            kind: FsNodeKind::Directory,
+        }
+    }
+
+    fn as_resolved_file(self) -> ResolvedFile {
+        ResolvedFile {
+            mount_id: self.mount_id,
+            ino: self.ino,
+            kind: self.kind,
+        }
+    }
+
+    fn is_primary_root(self) -> bool {
+        self.mount_id == primary_mount_id() && self.ino == EXT4_ROOT_INO
+    }
+
+    fn is_mount_root(self) -> bool {
+        self.ino == EXT4_ROOT_INO
+    }
 }
 
 fn parse_prefixed_mount(component: &str) -> Option<MountId> {
@@ -62,61 +99,91 @@ fn parse_prefixed_mount(component: &str) -> Option<MountId> {
     (index != 0).then_some(MountId(index))
 }
 
-fn resolve_absolute_mount(path: &str) -> Option<(MountId, &str)> {
-    let relpath = path.strip_prefix('/')?;
-    if relpath.is_empty() {
-        return Some((primary_mount_id(), ""));
-    }
-
-    let (first_component, rest) = match relpath.split_once('/') {
-        Some((first_component, rest)) => (first_component, Some(rest)),
-        None => return Some((primary_mount_id(), relpath)),
-    };
-
-    let Some(mount_id) = parse_prefixed_mount(first_component) else {
-        return Some((primary_mount_id(), relpath));
-    };
-
-    let mount_relpath = rest?.trim_start_matches('/');
-    if mount_relpath.is_empty() || !mount_exists(mount_id) {
+fn lookup_child(cursor: PathCursor, component: &str) -> Option<PathCursor> {
+    if cursor.kind != FsNodeKind::Directory {
         return None;
     }
-    Some((mount_id, mount_relpath))
+
+    // CONTEXT: `/xN` is this kernel's virtual mount-prefix namespace, not a real
+    // directory entry on the primary EXT4 filesystem.
+    if cursor.is_primary_root() {
+        if let Some(mount_id) = parse_prefixed_mount(component) {
+            if mount_exists(mount_id) {
+                return Some(PathCursor {
+                    mount_id,
+                    ino: EXT4_ROOT_INO,
+                    kind: FsNodeKind::Directory,
+                });
+            }
+            return None;
+        }
+    }
+
+    let (ino, kind) = with_mount(cursor.mount_id, |mount| {
+        mount.lookup_component_from(cursor.ino, component)
+    })??;
+    Some(PathCursor {
+        mount_id: cursor.mount_id,
+        ino,
+        kind,
+    })
 }
 
-fn resolve_on_mount<'a>(
-    mount_id: MountId,
-    base_ino: u32,
-    relpath: &'a str,
-    for_create: bool,
-) -> Option<ResolvedOpen<'a>> {
-    with_mount(mount_id, |mount| {
-        // TODO: we need a ResolvedFile and CreateTarget new function.
-        if for_create {
-            if let Some((ino, kind)) = mount.lookup_path_from(base_ino, relpath) {
-                Some(ResolvedOpen::Existing(ResolvedFile {
-                    mount_id,
-                    ino,
-                    kind,
-                }))
-            } else {
-                let (parent_ino, leaf_name) = mount.resolve_parent_from(base_ino, relpath)?;
-                Some(ResolvedOpen::Create(CreateTarget {
-                    mount_id,
-                    parent_ino,
-                    leaf_name,
-                }))
-            }
-        } else {
-            let (ino, kind) = mount.lookup_path_from(base_ino, relpath)?;
-            Some(ResolvedOpen::Existing(ResolvedFile {
-                mount_id,
-                ino,
-                kind,
-            }))
+fn lookup_parent(cursor: PathCursor) -> Option<PathCursor> {
+    if cursor.is_mount_root() {
+        if cursor.mount_id == primary_mount_id() {
+            return Some(PathCursor::root());
         }
-    })
-    .flatten()
+        return Some(PathCursor::root());
+    }
+    lookup_child(cursor, "..")
+}
+
+fn start_cursor(cwd: Option<WorkingDir>, path: &str) -> PathCursor {
+    if path.starts_with('/') {
+        PathCursor::root()
+    } else if let Some(cwd) = cwd {
+        PathCursor::from_working_dir(cwd)
+    } else {
+        PathCursor::root()
+    }
+}
+
+fn resolve_path(cwd: Option<WorkingDir>, path: &str) -> Option<PathCursor> {
+    let mut cursor = start_cursor(cwd, path);
+    for component in path
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+    {
+        if component == ".." {
+            cursor = lookup_parent(cursor)?;
+        } else {
+            cursor = lookup_child(cursor, component)?;
+        }
+    }
+    Some(cursor)
+}
+
+fn split_parent_path(path: &str) -> Option<(&str, &str)> {
+    if path.is_empty() {
+        return None;
+    }
+    let (parent_path, leaf_name) = match path.rsplit_once('/') {
+        Some((parent_path, leaf_name)) => (parent_path, leaf_name),
+        None => ("", path),
+    };
+    if leaf_name.is_empty() || leaf_name == "." || leaf_name == ".." {
+        return None;
+    }
+    Some((parent_path, leaf_name))
+}
+
+fn parent_path_for_lookup<'a>(path: &str, parent_path: &'a str) -> &'a str {
+    if path.starts_with('/') && parent_path.is_empty() {
+        "/"
+    } else {
+        parent_path
+    }
 }
 
 pub(super) fn resolve_open_target(
@@ -125,62 +192,41 @@ pub(super) fn resolve_open_target(
     _require_writable: bool,
     for_create: bool,
 ) -> Option<ResolvedOpen<'_>> {
-    if path.starts_with('/') {
-        let (mount_id, relpath) = resolve_absolute_mount(path)?;
-        return resolve_on_mount(mount_id, EXT4_ROOT_INO, relpath, for_create);
+    if let Some(existing) = resolve_path(cwd, path) {
+        return Some(ResolvedOpen::Existing(existing.as_resolved_file()));
     }
 
-    if let Some(cwd) = cwd {
-        return resolve_on_mount(cwd.mount_id(), cwd.ino(), path, for_create);
+    if !for_create {
+        return None;
     }
-
-    if is_bare_name(path) {
-        return resolve_on_mount(primary_mount_id(), EXT4_ROOT_INO, path, for_create);
+    let (parent_path, leaf_name) = split_parent_path(path)?;
+    let parent_path = parent_path_for_lookup(path, parent_path);
+    let parent = resolve_path(cwd, parent_path)?;
+    if parent.kind != FsNodeKind::Directory {
+        return None;
     }
-
-    None
+    Some(ResolvedOpen::Create(CreateTarget {
+        mount_id: parent.mount_id,
+        parent_ino: parent.ino,
+        leaf_name,
+    }))
 }
 
 pub(super) fn resolve_parent_target(
     cwd: Option<WorkingDir>,
     path: &str,
 ) -> Option<ParentTarget<'_>> {
-    if path.starts_with('/') {
-        let (mount_id, relpath) = resolve_absolute_mount(path)?;
-        let (parent_ino, leaf_name) = with_mount(mount_id, |mount| {
-            mount.resolve_parent_from(EXT4_ROOT_INO, relpath)
-        })??;
-        return Some(ParentTarget {
-            mount_id,
-            parent_ino,
-            leaf_name,
-        });
+    let (parent_path, leaf_name) = split_parent_path(path)?;
+    let parent_path = parent_path_for_lookup(path, parent_path);
+    let parent = resolve_path(cwd, parent_path)?;
+    if parent.kind != FsNodeKind::Directory {
+        return None;
     }
-
-    if let Some(cwd) = cwd {
-        let (parent_ino, leaf_name) = with_mount(cwd.mount_id(), |mount| {
-            mount.resolve_parent_from(cwd.ino(), path)
-        })??;
-        return Some(ParentTarget {
-            mount_id: cwd.mount_id(),
-            parent_ino,
-            leaf_name,
-        });
-    }
-
-    if is_bare_name(path) {
-        let mount_id = primary_mount_id();
-        let (parent_ino, leaf_name) = with_mount(mount_id, |mount| {
-            mount.resolve_parent_from(EXT4_ROOT_INO, path)
-        })??;
-        return Some(ParentTarget {
-            mount_id,
-            parent_ino,
-            leaf_name,
-        });
-    }
-
-    None
+    Some(ParentTarget {
+        mount_id: parent.mount_id,
+        parent_ino: parent.ino,
+        leaf_name,
+    })
 }
 
 pub(crate) fn normalize_path(cwd_path: &str, path: &str) -> Option<alloc::string::String> {
@@ -191,9 +237,10 @@ pub(crate) fn normalize_path(cwd_path: &str, path: &str) -> Option<alloc::string
                 continue;
             }
             if segment == ".." {
-                return None;
+                segments.pop();
+            } else {
+                segments.push(segment);
             }
-            segments.push(segment);
         }
     } else {
         for segment in cwd_path.split('/') {
@@ -206,11 +253,11 @@ pub(crate) fn normalize_path(cwd_path: &str, path: &str) -> Option<alloc::string
             if segment.is_empty() || segment == "." {
                 continue;
             }
-            // TODO: handle ".." segments
             if segment == ".." {
-                return None;
+                segments.pop();
+            } else {
+                segments.push(segment);
             }
-            segments.push(segment);
         }
     }
 
