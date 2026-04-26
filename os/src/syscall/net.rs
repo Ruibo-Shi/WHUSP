@@ -1,7 +1,8 @@
+use crate::fs::OpenFlags;
 use crate::net::port_table::{PortFd, accept, listen, port_acceptable};
 use crate::net::udp::UDP;
 use crate::net::{IPv4, net_interrupt_handler};
-use crate::task::{current_process, current_task, current_trap_cx};
+use crate::task::{FdTableEntry, current_process, current_task, current_trap_cx};
 use alloc::sync::Arc;
 
 // just support udp
@@ -10,7 +11,7 @@ pub fn sys_connect(raddr: u32, lport: u16, rport: u16) -> isize {
     let mut inner = process.inner_exclusive_access();
     let fd = inner.alloc_fd();
     let udp_node = UDP::new(IPv4::from_u32(raddr), lport, rport);
-    inner.fd_table[fd] = Some(Arc::new(udp_node));
+    inner.fd_table[fd] = Some(FdTableEntry::from_file(Arc::new(udp_node), OpenFlags::RDWR));
     fd as isize
 }
 
@@ -22,7 +23,7 @@ pub fn sys_listen(port: u16) -> isize {
             let mut inner = process.inner_exclusive_access();
             let fd = inner.alloc_fd();
             let port_fd = PortFd::new(port_index);
-            inner.fd_table[fd] = Some(Arc::new(port_fd));
+            inner.fd_table[fd] = Some(FdTableEntry::from_file(Arc::new(port_fd), OpenFlags::RDWR));
 
             // NOTICE: this return the port index, not the fd
             port_index as isize

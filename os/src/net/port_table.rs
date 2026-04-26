@@ -2,9 +2,9 @@ use alloc::{sync::Arc, vec::Vec};
 use lazy_static::lazy_static;
 use lose_net_stack::packets::tcp::TCPPacket;
 
-use crate::fs::File;
+use crate::fs::{File, OpenFlags};
 use crate::sync::UPIntrFreeCell;
-use crate::task::TaskControlBlock;
+use crate::task::{FdTableEntry, TaskControlBlock};
 
 use super::tcp::TCP;
 
@@ -101,7 +101,10 @@ pub fn accept_connection(_port: u16, tcp_packet: &TCPPacket, task: Arc<TaskContr
         tcp_packet.ack,
     );
 
-    inner.fd_table[fd] = Some(Arc::new(tcp_socket));
+    inner.fd_table[fd] = Some(FdTableEntry::from_file(
+        Arc::new(tcp_socket),
+        OpenFlags::RDWR,
+    ));
 
     let cx = task.inner_exclusive_access().get_trap_cx();
     cx.x[10] = fd;

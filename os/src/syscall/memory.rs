@@ -82,8 +82,8 @@ fn sys_mmap_impl(
         let file = inner
             .fd_table
             .get(fd as usize)
-            .and_then(|file| file.as_ref())
-            .cloned()
+            .and_then(|entry| entry.as_ref())
+            .map(|entry| entry.file())
             .ok_or(SysError::EBADF)?;
         if !file.readable() {
             return Err(SysError::EACCES);

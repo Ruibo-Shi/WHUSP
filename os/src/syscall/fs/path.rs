@@ -2,7 +2,7 @@ use crate::fs::{
     OpenFlags, WorkingDir, lookup_dir_at, mkdir_at, normalize_path, open_file_at, unlink_file_at,
 };
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_str};
-use crate::task::{current_process, current_user_token};
+use crate::task::{FdTableEntry, current_process, current_user_token};
 
 use super::super::errno::{SysError, SysResult};
 use super::fd::get_file_by_fd;
@@ -63,7 +63,7 @@ pub fn sys_openat(dirfd: isize, path: *const u8, flags: u32, _mode: u32) -> SysR
     };
     let mut inner = process.inner_exclusive_access();
     let fd = inner.alloc_fd();
-    inner.fd_table[fd] = Some(inode);
+    inner.fd_table[fd] = Some(FdTableEntry::from_file(inode, flags));
     Ok(fd as isize)
 }
 
@@ -123,8 +123,8 @@ pub fn sys_getdents64(fd: usize, buf: *mut u8, len: usize) -> SysResult {
     let Some(file) = inner
         .fd_table
         .get(fd)
-        .and_then(|file| file.as_ref())
-        .cloned()
+        .and_then(|entry| entry.as_ref())
+        .map(|entry| entry.file())
     else {
         return Err(SysError::EBADF);
     };

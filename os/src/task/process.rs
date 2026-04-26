@@ -1,7 +1,6 @@
-use super::TaskControlBlock;
 use super::id::RecycleAllocator;
-use super::{PidHandle, SignalFlags};
-use crate::fs::{File, WorkingDir};
+use super::{FD_LIMIT, FdTableEntry, PidHandle, SignalFlags, TaskControlBlock};
+use crate::fs::WorkingDir;
 use crate::mm::MemorySet;
 use crate::sync::{Condvar, Mutex, Semaphore, UPIntrFreeCell, UPIntrRefMut};
 use alloc::string::String;
@@ -23,7 +22,7 @@ pub struct ProcessControlBlockInner {
     pub parent: Option<Weak<ProcessControlBlock>>,
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
-    pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub fd_table: Vec<Option<FdTableEntry>>,
     pub signals: SignalFlags,
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     pub task_res_allocator: RecycleAllocator,
@@ -39,11 +38,26 @@ impl ProcessControlBlockInner {
     }
 
     pub fn alloc_fd(&mut self) -> usize {
-        if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
-            fd
+        self.alloc_fd_from(0).expect("fd table exhausted")
+    }
+
+    pub fn alloc_fd_from(&mut self, lower_bound: usize) -> Option<usize> {
+        if lower_bound >= FD_LIMIT {
+            return None;
+        }
+        if let Some(fd) =
+            (lower_bound..self.fd_table.len().min(FD_LIMIT)).find(|fd| self.fd_table[*fd].is_none())
+        {
+            Some(fd)
         } else {
-            self.fd_table.push(None);
-            self.fd_table.len() - 1
+            let fd = self.fd_table.len().max(lower_bound);
+            if fd >= FD_LIMIT {
+                return None;
+            }
+            while self.fd_table.len() <= fd {
+                self.fd_table.push(None);
+            }
+            Some(fd)
         }
     }
 

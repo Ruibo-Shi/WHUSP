@@ -1,6 +1,7 @@
 mod clone;
 mod context;
 mod exec;
+mod fd;
 mod id;
 mod manager;
 mod process;
@@ -24,6 +25,7 @@ use switch::__switch;
 
 pub use clone::{CloneArgs, CloneFlags, clone_current_thread};
 pub use context::TaskContext;
+pub(crate) use fd::{FD_LIMIT, FdFlags, FdTableEntry};
 pub use id::{IDLE_PID, KernelStack, PidHandle, kstack_alloc, pid_alloc};
 pub use manager::{add_task, pid2process, remove_from_pid2process, wakeup_task};
 pub use processor::{

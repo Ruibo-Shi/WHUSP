@@ -63,6 +63,9 @@ pub trait File: Send + Sync {
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
     fn write(&self, buf: UserBuffer) -> usize;
+    fn write_append(&self, buf: UserBuffer) -> usize {
+        self.write(buf)
+    }
     fn poll(&self, events: PollEvents) -> PollEvents {
         let mut ready = PollEvents::empty();
         if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI | PollEvents::POLLRDHUP)
