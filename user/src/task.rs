@@ -27,6 +27,9 @@ pub fn get_time() -> isize {
 pub fn getpid() -> isize {
     sys_getpid()
 }
+pub fn getppid() -> isize {
+    sys_getppid()
+}
 pub fn brk(addr: usize) -> usize {
     sys_brk(addr) as usize
 }

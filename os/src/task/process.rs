@@ -100,4 +100,16 @@ impl ProcessControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
+
+    pub fn parent_process(&self) -> Option<Arc<Self>> {
+        self.inner
+            .exclusive_access()
+            .parent
+            .as_ref()
+            .and_then(Weak::upgrade)
+    }
+
+    pub fn getppid(&self) -> usize {
+        self.parent_process().map_or(0, |parent| parent.getpid())
+    }
 }

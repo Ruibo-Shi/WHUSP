@@ -48,6 +48,12 @@ pub fn sys_getpid() -> isize {
     current_task().unwrap().process.upgrade().unwrap().getpid() as isize
 }
 
+pub fn sys_getppid() -> isize {
+    // UNFINISHED: PID namespaces and child subreapers are not modeled yet, so
+    // this returns the single-namespace parent recorded in the PCB.
+    current_process().getppid() as isize
+}
+
 pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usize) -> SysResult {
     let Some(args) = CloneArgs::parse(flags, stack, ptid, tls, ctid) else {
         return Err(SysError::EINVAL);
@@ -61,7 +67,12 @@ pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usiz
 
 fn sys_clone_process(args: CloneArgs) -> SysResult {
     let current_process = current_process();
-    let new_process = current_process.fork();
+    let child_parent = if args.flags.contains(CloneFlags::CLONE_PARENT) {
+        current_process.parent_process().ok_or(SysError::EINVAL)?
+    } else {
+        Arc::clone(&current_process)
+    };
+    let new_process = current_process.fork(child_parent);
     let new_pid = new_process.getpid();
     let child_token = new_process.configure_cloned_main_task(args);
 
