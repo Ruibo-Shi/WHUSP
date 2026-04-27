@@ -1,6 +1,8 @@
 use super::ext4::FsNodeKind;
 use super::mount::{MountId, with_mount};
-use super::path::{ResolvedOpen, WorkingDir, resolve_open_target, resolve_parent_target};
+use super::path::{
+    ResolvedOpen, WorkingDir, resolve_mount_target, resolve_open_target, resolve_parent_target,
+};
 use super::{File, FileStat};
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
@@ -181,6 +183,11 @@ pub(crate) fn lookup_dir_at(cwd: WorkingDir, name: &str) -> Option<WorkingDir> {
         }
         _ => None,
     }
+}
+
+pub(crate) fn lookup_mount_target_dir_at(cwd: WorkingDir, name: &str) -> Option<WorkingDir> {
+    let file = resolve_mount_target(Some(cwd), name)?;
+    (file.kind == FsNodeKind::Directory).then_some(WorkingDir::new(file.mount_id, file.ino))
 }
 
 pub(crate) fn mkdir_at(cwd: WorkingDir, name: &str, mode: u32) -> Option<()> {

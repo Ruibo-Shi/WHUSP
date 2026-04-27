@@ -1,5 +1,5 @@
 use super::ext4::FsNodeKind;
-use super::mount::{MountId, mount_exists, primary_mount_id, with_mount};
+use super::mount::{MountId, mount_exists, mounted_root_for, primary_mount_id, with_mount};
 use lwext4_rust::ffi::EXT4_ROOT_INO;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,11 +20,11 @@ impl WorkingDir {
         Self { mount_id, ino }
     }
 
-    fn mount_id(self) -> MountId {
+    pub(crate) fn mount_id(self) -> MountId {
         self.mount_id
     }
 
-    fn ino(self) -> u32 {
+    pub(crate) fn ino(self) -> u32 {
         self.ino
     }
 }
@@ -99,7 +99,21 @@ fn parse_prefixed_mount(component: &str) -> Option<MountId> {
     (index != 0).then_some(MountId(index))
 }
 
-fn lookup_child(cursor: PathCursor, component: &str) -> Option<PathCursor> {
+fn follow_mounted_root(cursor: PathCursor) -> PathCursor {
+    if cursor.kind != FsNodeKind::Directory {
+        return cursor;
+    }
+    if let Some(mount_id) = mounted_root_for(cursor.mount_id, cursor.ino) {
+        return PathCursor {
+            mount_id,
+            ino: EXT4_ROOT_INO,
+            kind: FsNodeKind::Directory,
+        };
+    }
+    cursor
+}
+
+fn lookup_child_raw(cursor: PathCursor, component: &str) -> Option<PathCursor> {
     if cursor.kind != FsNodeKind::Directory {
         return None;
     }
@@ -131,12 +145,14 @@ fn lookup_child(cursor: PathCursor, component: &str) -> Option<PathCursor> {
 
 fn lookup_parent(cursor: PathCursor) -> Option<PathCursor> {
     if cursor.is_mount_root() {
+        // UNFINISHED: Dynamic mounts do not remember the covered directory's
+        // parent, so `..` from a mounted root currently falls back to `/`.
         if cursor.mount_id == primary_mount_id() {
             return Some(PathCursor::root());
         }
         return Some(PathCursor::root());
     }
-    lookup_child(cursor, "..")
+    lookup_child_raw(cursor, "..")
 }
 
 fn start_cursor(cwd: Option<WorkingDir>, path: &str) -> PathCursor {
@@ -149,19 +165,38 @@ fn start_cursor(cwd: Option<WorkingDir>, path: &str) -> PathCursor {
     }
 }
 
-fn resolve_path(cwd: Option<WorkingDir>, path: &str) -> Option<PathCursor> {
+fn resolve_path_inner(
+    cwd: Option<WorkingDir>,
+    path: &str,
+    follow_final_mount: bool,
+) -> Option<PathCursor> {
     let mut cursor = start_cursor(cwd, path);
-    for component in path
+    let mut components = path
         .split('/')
         .filter(|component| !component.is_empty() && *component != ".")
-    {
+        .peekable();
+    if follow_final_mount && components.peek().is_none() {
+        cursor = follow_mounted_root(cursor);
+    }
+    while let Some(component) = components.next() {
         if component == ".." {
             cursor = lookup_parent(cursor)?;
         } else {
-            cursor = lookup_child(cursor, component)?;
+            cursor = lookup_child_raw(cursor, component)?;
+        }
+        if follow_final_mount || components.peek().is_some() {
+            cursor = follow_mounted_root(cursor);
         }
     }
     Some(cursor)
+}
+
+fn resolve_path(cwd: Option<WorkingDir>, path: &str) -> Option<PathCursor> {
+    resolve_path_inner(cwd, path, true)
+}
+
+pub(super) fn resolve_mount_target(cwd: Option<WorkingDir>, path: &str) -> Option<ResolvedFile> {
+    Some(resolve_path_inner(cwd, path, false)?.as_resolved_file())
 }
 
 fn split_parent_path(path: &str) -> Option<(&str, &str)> {
