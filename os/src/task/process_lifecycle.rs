@@ -1,7 +1,7 @@
 use super::exec::{ExecStackInfo, init_user_stack};
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
-use super::process::{ProcessControlBlock, ProcessControlBlockInner};
+use super::process::{ProcessControlBlock, ProcessControlBlockInner, ProcessCpuTimes};
 use super::{
     CloneArgs, CloneFlags, FdTableEntry, SignalFlags, TaskControlBlock, add_task, pid_alloc,
 };
@@ -70,6 +70,7 @@ impl ProcessControlBlock {
                         Some(FdTableEntry::from_file(Arc::new(Stdout), OpenFlags::WRONLY)),
                     ],
                     signals: SignalFlags::empty(),
+                    cpu_times: ProcessCpuTimes::default(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
@@ -150,6 +151,7 @@ impl ProcessControlBlock {
                     exit_code: 0,
                     fd_table: new_fd_table,
                     signals: SignalFlags::empty(),
+                    cpu_times: ProcessCpuTimes::default(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),

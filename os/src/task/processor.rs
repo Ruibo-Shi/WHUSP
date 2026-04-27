@@ -114,4 +114,5 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+    super::mark_current_kernel_time_entry(crate::timer::get_time_us());
 }

@@ -115,13 +115,20 @@ pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsag
             wait4_child_matches(child.getpid(), pid) && child.inner_exclusive_access().is_zombie
         });
         if let Some((idx, child)) = zombie {
-            let found_pid = child.getpid();
-            let exit_code = child.inner_exclusive_access().exit_code;
+            let (found_pid, exit_code, child_times) = {
+                let child_inner = child.inner_exclusive_access();
+                (
+                    child.getpid(),
+                    child_inner.exit_code,
+                    child_inner.cpu_times.snapshot(),
+                )
+            };
             let token = inner.memory_set.token();
             if !wstatus.is_null() {
                 *translated_refmut(token, wstatus) = wait_status(exit_code);
             }
             write_rusage(token, rusage);
+            inner.cpu_times.add_waited_child(child_times);
 
             let child = inner.children.remove(idx);
             assert_eq!(Arc::strong_count(&child), 1);
@@ -173,8 +180,14 @@ pub fn sys_waitid(
                 && child.inner_exclusive_access().is_zombie
         });
         if let Some((idx, child)) = zombie {
-            let child_pid = child.getpid();
-            let exit_code = child.inner_exclusive_access().exit_code;
+            let (child_pid, exit_code, child_times) = {
+                let child_inner = child.inner_exclusive_access();
+                (
+                    child.getpid(),
+                    child_inner.exit_code,
+                    child_inner.cpu_times.snapshot(),
+                )
+            };
             let (si_code, si_status) = waitid_code_and_status(exit_code);
             let token = inner.memory_set.token();
             if !infop.is_null() {
@@ -189,6 +202,7 @@ pub fn sys_waitid(
             write_rusage(token, rusage);
 
             if options & WNOWAIT == 0 {
+                inner.cpu_times.add_waited_child(child_times);
                 let child = inner.children.remove(idx);
                 assert_eq!(Arc::strong_count(&child), 1);
             }

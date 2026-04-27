@@ -19,7 +19,7 @@ use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
 use log::info;
 use manager::fetch_task;
-use process::ProcessControlBlock;
+pub use process::{ProcessControlBlock, ProcessCpuTimesSnapshot};
 use switch::__switch;
 
 pub use clone::{CloneArgs, CloneFlags, clone_current_thread};
@@ -34,8 +34,37 @@ pub use processor::{
 pub use signal::SignalFlags;
 pub use task::{TaskControlBlock, TaskStatus};
 
+fn with_current_process(process_fn: impl FnOnce(&ProcessControlBlock)) {
+    if let Some(task) = current_task() {
+        if let Some(process) = task.process.upgrade() {
+            process_fn(&process);
+        }
+    }
+}
+
+pub fn account_current_user_time_until(now_us: usize) {
+    with_current_process(|process| process.account_user_time_until(now_us));
+}
+
+pub fn account_current_system_time_until(now_us: usize) {
+    with_current_process(|process| process.account_system_time_until(now_us));
+}
+
+pub fn account_current_system_time() {
+    account_current_system_time_until(crate::timer::get_time_us());
+}
+
+pub fn mark_current_user_time_entry(now_us: usize) {
+    with_current_process(|process| process.mark_user_time_entry(now_us));
+}
+
+pub fn mark_current_kernel_time_entry(now_us: usize) {
+    with_current_process(|process| process.mark_kernel_time_entry(now_us));
+}
+
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
+    account_current_system_time();
     let task = take_current_task().unwrap();
 
     // ---- access current TCB exclusively
@@ -54,6 +83,7 @@ pub fn suspend_current_and_run_next() {
 
 /// This function must be followed by a schedule
 pub fn block_current_task() -> *mut TaskContext {
+    account_current_system_time();
     let task = take_current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
     task_inner.task_status = TaskStatus::Blocked;
@@ -67,6 +97,7 @@ pub fn block_current_and_run_next() {
 
 /// Exit the current 'Running' task and run the next task in task list.
 pub fn exit_current_and_run_next(exit_code: i32) {
+    account_current_system_time();
     let task = take_current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
     let process = task.process.upgrade().unwrap();
