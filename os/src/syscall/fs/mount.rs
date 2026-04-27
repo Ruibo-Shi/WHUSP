@@ -51,6 +51,7 @@ fn parse_virtio_block_source(source: &str) -> SysResult<usize> {
 fn mount_error_to_errno(error: MountError) -> SysError {
     match error {
         MountError::SourceMissing => SysError::ENODEV,
+        MountError::InvalidFilesystem => SysError::EINVAL,
         MountError::TargetBusy | MountError::StaticRoot => SysError::EBUSY,
         MountError::TargetNotMounted => SysError::EINVAL,
     }

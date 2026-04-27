@@ -4,6 +4,8 @@ const SYSCALL_FCNTL: usize = 25;
 const SYSCALL_IOCTL: usize = 29;
 const SYSCALL_MKDIRAT: usize = 34;
 const SYSCALL_UNLINKAT: usize = 35;
+const SYSCALL_UMOUNT2: usize = 39;
+const SYSCALL_MOUNT: usize = 40;
 const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPENAT: usize = 56;
 const SYSCALL_CLOSE: usize = 57;
@@ -161,6 +163,27 @@ pub fn sys_unlinkat(dirfd: isize, path: &str, flags: u32) -> isize {
             flags as usize,
             0,
             0,
+            0,
+        ],
+    )
+}
+
+pub fn sys_umount2(target: &str, flags: i32) -> isize {
+    syscall(
+        SYSCALL_UMOUNT2,
+        [target.as_ptr() as usize, flags as usize, 0, 0, 0, 0],
+    )
+}
+
+pub fn sys_mount(source: &str, target: &str, fstype: &str, flags: usize, data: *const u8) -> isize {
+    syscall(
+        SYSCALL_MOUNT,
+        [
+            source.as_ptr() as usize,
+            target.as_ptr() as usize,
+            fstype.as_ptr() as usize,
+            flags,
+            data as usize,
             0,
         ],
     )

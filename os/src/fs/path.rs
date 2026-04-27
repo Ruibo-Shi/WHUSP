@@ -1,5 +1,5 @@
 use super::ext4::FsNodeKind;
-use super::mount::{MountId, mount_exists, mounted_root_for, primary_mount_id, with_mount};
+use super::mount::{MountId, mounted_root_for, primary_mount_id, with_mount};
 use lwext4_rust::ffi::EXT4_ROOT_INO;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,19 +84,9 @@ impl PathCursor {
         }
     }
 
-    fn is_primary_root(self) -> bool {
-        self.mount_id == primary_mount_id() && self.ino == EXT4_ROOT_INO
-    }
-
     fn is_mount_root(self) -> bool {
         self.ino == EXT4_ROOT_INO
     }
-}
-
-fn parse_prefixed_mount(component: &str) -> Option<MountId> {
-    let suffix = component.strip_prefix('x')?;
-    let index = suffix.parse::<usize>().ok()?;
-    (index != 0).then_some(MountId(index))
 }
 
 fn follow_mounted_root(cursor: PathCursor) -> PathCursor {
@@ -116,21 +106,6 @@ fn follow_mounted_root(cursor: PathCursor) -> PathCursor {
 fn lookup_child_raw(cursor: PathCursor, component: &str) -> Option<PathCursor> {
     if cursor.kind != FsNodeKind::Directory {
         return None;
-    }
-
-    // CONTEXT: `/xN` is this kernel's virtual mount-prefix namespace, not a real
-    // directory entry on the primary EXT4 filesystem.
-    if cursor.is_primary_root() {
-        if let Some(mount_id) = parse_prefixed_mount(component) {
-            if mount_exists(mount_id) {
-                return Some(PathCursor {
-                    mount_id,
-                    ino: EXT4_ROOT_INO,
-                    kind: FsNodeKind::Directory,
-                });
-            }
-            return None;
-        }
     }
 
     let (ino, kind) = with_mount(cursor.mount_id, |mount| {

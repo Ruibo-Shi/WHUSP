@@ -22,8 +22,8 @@
 - [x] 修正 `os/src/boards/qemu.rs`，去掉对鼠标的硬依赖
 - [x] 用官方评测风格的无头 QEMU 命令验证内核可以启动（`ci-riscv-smoke.yml` 已覆盖）
 - [x] 升级块设备发现逻辑，支持识别多个 virtio block 设备（`BLOCK_DEVICE_CAPACITY=8`，按 base 排序）
-- [x] 明确区分评测盘 `x0` 和自带盘 `x1`
-- [x] 设计并实现测试盘挂载路径（`x0` → `/`，`x1` → `/x1`）
+- [x] 明确区分评测盘 `x0` 和可选辅助块设备 `x1`
+- [x] 设计并实现动态挂载路径（`x0` → `/`，额外盘 lazy-open 后覆盖真实目录 `/x1`、`/x2`）
 - [x] 接入评测 EXT4 测试盘的只读访问
 
 ## P2 — basic-musl syscall 补齐（跑通 `/musl/basic_testcode.sh` 前置）
@@ -45,7 +45,7 @@
   - [ ] `sleep` 相关语义仍不兼容（`test_sleep` 触发 assert）
   - [ ] `times(153)` 未补齐（`test_times` 触发 assert）
   - [ ] `uname(160)` 仍不兼容（`test_uname` 触发 assert）
-  - [ ] `mount(40)` / `umount2(39)` 竞赛测试语义仍需完善（`mount` 当前返回 `-19`）
+  - [ ] `mount(40)` / `umount2(39)` 竞赛测试语义仍需完善（当前只支持 whole-disk ext4；`/dev/vda2` 分区和 `vfat` 仍未支持）
 - [ ] 让 `/musl/basic_testcode.sh` 可以完整跑通
   - [ ] 非 syscall 问题：`/musl/basic_testcode.sh` 无 shebang，需用 `./busybox sh ./basic_testcode.sh` 执行
 
