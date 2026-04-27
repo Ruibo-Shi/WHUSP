@@ -4,6 +4,13 @@ use super::{MapArea, MapPermission, MapType, MemorySet, VPNRange, VirtAddr};
 use crate::config::{PAGE_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT};
 use crate::fs::File;
 use alloc::sync::Arc;
+use core::arch::asm;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryProtectError {
+    Unmapped,
+    AccessDenied,
+}
 
 impl MemorySet {
     pub fn from_existed_user(user_space: &MemorySet) -> MemorySet {
@@ -115,6 +122,54 @@ impl MemorySet {
         true
     }
 
+    pub fn mprotect_area(
+        &mut self,
+        start: usize,
+        len: usize,
+        permission: MapPermission,
+    ) -> Result<(), MemoryProtectError> {
+        if len == 0 {
+            return Ok(());
+        }
+        if start % PAGE_SIZE != 0 {
+            return Err(MemoryProtectError::Unmapped);
+        }
+        let Some(end) = start.checked_add(len) else {
+            return Err(MemoryProtectError::Unmapped);
+        };
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).floor();
+        if !self.range_is_mapped_vpn(start_vpn, end_vpn) {
+            return Err(MemoryProtectError::Unmapped);
+        }
+
+        if permission.contains(MapPermission::W) && !self.can_mprotect_write(start_vpn, end_vpn) {
+            return Err(MemoryProtectError::AccessDenied);
+        }
+
+        self.split_area_at(start_vpn);
+        self.split_area_at(end_vpn);
+
+        let mut touched = false;
+        for area in &mut self.areas {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            if area_start >= start_vpn && area_end <= end_vpn {
+                if !area.remap_permission(&mut self.page_table, permission) {
+                    return Err(MemoryProtectError::Unmapped);
+                }
+                touched = true;
+            }
+        }
+        if !touched {
+            return Err(MemoryProtectError::Unmapped);
+        }
+        unsafe {
+            asm!("sfence.vma");
+        }
+        Ok(())
+    }
+
     fn alloc_mmap_range(&self, len: usize) -> Option<usize> {
         if len == 0 || len > USER_MMAP_LIMIT - USER_MMAP_BASE {
             return None;
@@ -141,5 +196,66 @@ impl MemorySet {
             let area_end = area.vpn_range.get_end();
             start_vpn < area_end && end_vpn > area_start
         })
+    }
+
+    fn range_is_mapped_vpn(&self, start: super::VirtPageNum, end: super::VirtPageNum) -> bool {
+        let mut cursor = start;
+        while cursor < end {
+            let Some(area_end) = self
+                .areas
+                .iter()
+                .filter_map(|area| {
+                    let area_start = area.vpn_range.get_start();
+                    let area_end = area.vpn_range.get_end();
+                    if area_start <= cursor && cursor < area_end {
+                        Some(area_end)
+                    } else {
+                        None
+                    }
+                })
+                .max()
+            else {
+                return false;
+            };
+            if area_end <= cursor {
+                return false;
+            }
+            cursor = area_end.min(end);
+        }
+        true
+    }
+
+    fn split_area_at(&mut self, at: super::VirtPageNum) {
+        let Some(idx) = self.areas.iter().position(|area| {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            area_start < at && at < area_end
+        }) else {
+            return;
+        };
+        if let Some(right) = self.areas[idx].split_off(at) {
+            self.areas.insert(idx + 1, right);
+        }
+    }
+
+    fn can_mprotect_write(&self, start: super::VirtPageNum, end: super::VirtPageNum) -> bool {
+        self.areas
+            .iter()
+            .filter(|area| {
+                let area_start = area.vpn_range.get_start();
+                let area_end = area.vpn_range.get_end();
+                area_start < end && area_end > start
+            })
+            .all(|area| {
+                let Some(info) = &area.mmap_info else {
+                    return true;
+                };
+                if !info.shared {
+                    return true;
+                }
+                info.backing_file
+                    .as_ref()
+                    .is_none_or(|file| file.writable())
+            })
     }
 }

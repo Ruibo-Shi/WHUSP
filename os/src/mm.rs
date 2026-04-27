@@ -19,6 +19,7 @@ pub use page_table::{
     PageTable, PageTableEntry, UserBuffer, translated_byte_buffer, translated_ref,
     translated_refmut, translated_str,
 };
+pub use user_space::MemoryProtectError;
 
 pub fn init() {
     heap_allocator::init_heap();
