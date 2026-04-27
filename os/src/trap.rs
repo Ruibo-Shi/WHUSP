@@ -3,11 +3,12 @@ mod context;
 use crate::config::TRAMPOLINE;
 use crate::syscall::syscall;
 use crate::task::{
-    SignalFlags, check_signals_of_current, current_add_signal, current_trap_cx,
-    current_trap_cx_user_va, current_user_token, exit_current_and_run_next,
+    SignalFlags, account_current_system_time_until, account_current_user_time_until,
+    check_signals_of_current, current_add_signal, current_trap_cx, current_trap_cx_user_va,
+    current_user_token, exit_current_and_run_next, mark_current_user_time_entry,
     suspend_current_and_run_next,
 };
-use crate::timer::{check_timer, set_next_trigger};
+use crate::timer::{check_timer, get_time_us, set_next_trigger};
 use core::arch::{asm, global_asm};
 use riscv::register::{
     mtvec::TrapMode,
@@ -60,6 +61,7 @@ fn disable_supervisor_interrupt() {
 #[unsafe(no_mangle)]
 pub fn trap_handler() -> ! {
     set_kernel_trap_entry();
+    account_current_user_time_until(get_time_us());
     let scause = scause::read();
     let stval = stval::read();
     // println!("into {:?}", scause.cause());
@@ -128,6 +130,9 @@ pub fn trap_handler() -> ! {
 /// set the reg a0 = trap_cx_ptr, reg a1 = phy addr of usr page table,
 /// finally, jump to new addr of __restore asm function
 pub fn trap_return() -> ! {
+    let now_us = get_time_us();
+    account_current_system_time_until(now_us);
+    mark_current_user_time_entry(now_us);
     disable_supervisor_interrupt();
     set_user_trap_entry();
     let trap_cx_user_va = current_trap_cx_user_va();

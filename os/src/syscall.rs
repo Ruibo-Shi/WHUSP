@@ -26,6 +26,7 @@ const SYSCALL_NANOSLEEP: usize = 101;
 const SYSCALL_CLOCK_NANOSLEEP: usize = 115;
 const SYSCALL_SCHED_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
+const SYSCALL_TIMES: usize = 153;
 const SYSCALL_UNAME: usize = 160;
 const SYSCALL_GETTIMEOFDAY: usize = 169;
 const SYSCALL_GETPID: usize = 172;
@@ -144,6 +145,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_SCHED_YIELD => Ok(sys_sched_yield()),
         SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
+        SYSCALL_TIMES => sys_times(args[0] as *mut LinuxTms),
         SYSCALL_UNAME => sys_uname(args[0] as *mut LinuxUtsName),
         SYSCALL_GETTIMEOFDAY => {
             sys_gettimeofday(args[0] as *mut LinuxTimeVal, args[1] as *mut LinuxTimezone)

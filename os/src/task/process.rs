@@ -7,6 +7,75 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProcessCpuTimesSnapshot {
+    pub user_us: usize,
+    pub system_us: usize,
+    pub children_user_us: usize,
+    pub children_system_us: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProcessCpuTimes {
+    // UNFINISHED: CPU accounting is process-wide and trap-boundary based;
+    // exact per-thread aggregation, scheduler tick attribution, and
+    // signal/job-control resource accounting are not modeled yet.
+    user_us: usize,
+    system_us: usize,
+    children_user_us: usize,
+    children_system_us: usize,
+    last_user_enter_us: Option<usize>,
+    last_kernel_enter_us: Option<usize>,
+}
+
+impl ProcessCpuTimes {
+    pub fn mark_user_entry(&mut self, now_us: usize) {
+        self.last_user_enter_us = Some(now_us);
+        self.last_kernel_enter_us = None;
+    }
+
+    pub fn mark_kernel_entry(&mut self, now_us: usize) {
+        self.last_kernel_enter_us = Some(now_us);
+        self.last_user_enter_us = None;
+    }
+
+    pub fn account_user_until(&mut self, now_us: usize) {
+        if let Some(start_us) = self.last_user_enter_us.take() {
+            self.user_us = self.user_us.saturating_add(now_us.saturating_sub(start_us));
+        }
+        self.last_kernel_enter_us = Some(now_us);
+    }
+
+    pub fn account_system_until(&mut self, now_us: usize) {
+        if let Some(start_us) = self.last_kernel_enter_us.take() {
+            self.system_us = self
+                .system_us
+                .saturating_add(now_us.saturating_sub(start_us));
+        }
+        self.last_kernel_enter_us = Some(now_us);
+    }
+
+    pub fn add_waited_child(&mut self, child: ProcessCpuTimesSnapshot) {
+        self.children_user_us = self
+            .children_user_us
+            .saturating_add(child.user_us)
+            .saturating_add(child.children_user_us);
+        self.children_system_us = self
+            .children_system_us
+            .saturating_add(child.system_us)
+            .saturating_add(child.children_system_us);
+    }
+
+    pub fn snapshot(&self) -> ProcessCpuTimesSnapshot {
+        ProcessCpuTimesSnapshot {
+            user_us: self.user_us,
+            system_us: self.system_us,
+            children_user_us: self.children_user_us,
+            children_system_us: self.children_system_us,
+        }
+    }
+}
+
 pub struct ProcessControlBlock {
     // immutable
     pub pid: PidHandle,
@@ -24,6 +93,7 @@ pub struct ProcessControlBlockInner {
     pub exit_code: i32,
     pub fd_table: Vec<Option<FdTableEntry>>,
     pub signals: SignalFlags,
+    pub cpu_times: ProcessCpuTimes,
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     pub task_res_allocator: RecycleAllocator,
     pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
@@ -111,5 +181,33 @@ impl ProcessControlBlock {
 
     pub fn getppid(&self) -> usize {
         self.parent_process().map_or(0, |parent| parent.getpid())
+    }
+
+    pub fn mark_user_time_entry(&self, now_us: usize) {
+        self.inner_exclusive_access()
+            .cpu_times
+            .mark_user_entry(now_us);
+    }
+
+    pub fn mark_kernel_time_entry(&self, now_us: usize) {
+        self.inner_exclusive_access()
+            .cpu_times
+            .mark_kernel_entry(now_us);
+    }
+
+    pub fn account_user_time_until(&self, now_us: usize) {
+        self.inner_exclusive_access()
+            .cpu_times
+            .account_user_until(now_us);
+    }
+
+    pub fn account_system_time_until(&self, now_us: usize) {
+        self.inner_exclusive_access()
+            .cpu_times
+            .account_system_until(now_us);
+    }
+
+    pub fn cpu_times_snapshot(&self) -> ProcessCpuTimesSnapshot {
+        self.inner_exclusive_access().cpu_times.snapshot()
     }
 }

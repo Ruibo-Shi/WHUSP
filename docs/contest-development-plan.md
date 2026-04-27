@@ -45,7 +45,7 @@
   - [ ] `sleep` 相关语义仍不兼容（`test_sleep` 触发 assert）
   - [ ] `times(153)` 未补齐（`test_times` 触发 assert）
   - [ ] `uname(160)` 仍不兼容（`test_uname` 触发 assert）
-  - [ ] `mount(40)` / `umount2(39)` 竞赛测试语义仍需完善（当前只支持 whole-disk ext4；`/dev/vda2` 分区和 `vfat` 仍未支持）
+  - [ ] `mount(40)` / `umount2(39)` 竞赛测试语义仍需完善（当前只支持 whole-disk ext4；`/dev/vda2` 分区和 `vfat` 仍未支持，FAT 库候选见 P2.6.5）
 - [ ] 让 `/musl/basic_testcode.sh` 可以完整跑通
   - [ ] 非 syscall 问题：`/musl/basic_testcode.sh` 无 shebang，需用 `./busybox sh ./basic_testcode.sh` 执行
 
@@ -136,6 +136,18 @@
   - [ ] `make run-rv` 下执行 `/musl/basic_testcode.sh` 或等价 BusyBox shell 包装
   - [ ] pipeline 复现不 panic，重复运行 5 次不死锁
   - [ ] `basic-musl` 文件系统相关用例全部通过：`open/openat/read/write/getdents/fstat/mkdir/unlink/chdir/getcwd/mount/umount/pipe/execve`
+
+## P2.6.5 — 可选 FAT/VFAT 支持路线图（用于 mount basic 测例兼容）
+
+- [ ] 采用 `starry-fatfs` 作为首选 FAT 库：它是 `rust-fatfs` 的 Starry-OS fork，crates.io 当前包名为 `starry-fatfs`，导入 crate 名仍按 `fatfs` 使用；计划 manifest 写法为 `fatfs = { package = "starry-fatfs", version = "0.4.1-preview.2", default-features = false, features = ["alloc", "lfn", "unicode"] }`
+- [ ] vendoring 前复核离线构建：把 `starry-fatfs` 及其依赖纳入 `vendor/crates`，并确认 `CARGO_NET_OFFLINE=true make all` 不访问网络
+- [ ] 为 WHUSP 块设备实现 `fatfs::Read` / `fatfs::Write` / `fatfs::Seek` 适配层，先只面向 512-byte sector 的 VirtIO block 设备
+- [ ] 在 `os/src/fs` 新增 FAT mount wrapper，把 `fatfs::FileSystem` 的 root dir、普通文件、目录遍历、create/remove/rename 基础能力映射到当前文件系统接口
+- [ ] 泛化当前 mount 表：从 `MountId -> Ext4Mount` 演进到可同时承载 `Ext4Mount` 与 `FatMount` 的枚举或 trait object，保持现有 ext4 root 行为不变
+- [ ] 在 `sys_mount` 中接受 `fstype == "vfat"` / `"fat32"`，并继续拒绝未实现 flags/data；`umount2` 复用现有动态卸载路径
+- [ ] 先补 `/dev/vda2` 这类分区源解析，否则 basic mount 测例默认参数仍无法定位 FAT 分区
+- [ ] FAT 语义边界：首轮不承诺 symlink、Unix owner/mode、hard link、完整时间戳和大小写规则；相关缺口用 `// UNFINISHED:` 标明
+- [ ] 验证顺序：先用 FAT32 镜像做内核内只读 lookup/read，再跑 create/write/read/remove，最后跑 `/musl/basic/mount` 和 `/musl/basic/umount`
 
 ## P2.7 — syscall 层瘦身路线图（让 syscall 只做 ABI adapter）
 

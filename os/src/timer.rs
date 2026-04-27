@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use lazy_static::*;
 use riscv::register::time;
 
-const TICKS_PER_SEC: usize = 100;
+pub const TICKS_PER_SEC: usize = 100;
 const MSEC_PER_SEC: usize = 1000;
 const USEC_PER_SEC: usize = 1_000_000;
 
@@ -25,6 +25,14 @@ pub fn get_time_us() -> usize {
     let ticks = time::read();
     let freq = clock_freq();
     ticks / freq * USEC_PER_SEC + ticks % freq * USEC_PER_SEC / freq
+}
+
+pub fn us_to_clock_ticks(us: usize) -> usize {
+    us / (USEC_PER_SEC / TICKS_PER_SEC)
+}
+
+pub fn get_time_clock_ticks() -> usize {
+    us_to_clock_ticks(get_time_us())
 }
 
 pub fn set_next_trigger() {

@@ -1,11 +1,11 @@
 use crate::fs::{OpenFlags, open_file_at};
 use crate::mm::{translated_ref, translated_refmut, translated_str};
 use crate::task::{
-    CloneArgs, CloneFlags, SignalFlags, add_task, clone_current_thread, current_process,
-    current_task, current_user_token, exit_current_and_run_next, pid2process,
+    CloneArgs, CloneFlags, ProcessCpuTimesSnapshot, SignalFlags, add_task, clone_current_thread,
+    current_process, current_task, current_user_token, exit_current_and_run_next, pid2process,
     suspend_current_and_run_next,
 };
-use crate::timer::get_time_us;
+use crate::timer::{get_time_clock_ticks, get_time_us, us_to_clock_ticks};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -49,6 +49,15 @@ pub struct LinuxTimezone {
     tz_dsttime: i32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxTms {
+    tms_utime: isize,
+    tms_stime: isize,
+    tms_cutime: isize,
+    tms_cstime: isize,
+}
+
 impl LinuxUtsName {
     fn field(value: &str) -> [u8; UTS_FIELD_LEN] {
         let mut field = [0u8; UTS_FIELD_LEN];
@@ -66,6 +75,21 @@ impl LinuxUtsName {
             version: Self::field("#1 SMP OSKernel2026"),
             machine: Self::field("riscv64"),
             domainname: Self::field("(none)"),
+        }
+    }
+}
+
+fn clock_ticks_to_isize(ticks: usize) -> isize {
+    ticks.min(isize::MAX as usize) as isize
+}
+
+impl LinuxTms {
+    fn from_cpu_times(times: ProcessCpuTimesSnapshot) -> Self {
+        Self {
+            tms_utime: clock_ticks_to_isize(us_to_clock_ticks(times.user_us)),
+            tms_stime: clock_ticks_to_isize(us_to_clock_ticks(times.system_us)),
+            tms_cutime: clock_ticks_to_isize(us_to_clock_ticks(times.children_user_us)),
+            tms_cstime: clock_ticks_to_isize(us_to_clock_ticks(times.children_system_us)),
         }
     }
 }
@@ -124,6 +148,14 @@ pub fn sys_uname(name: *mut LinuxUtsName) -> SysResult {
     // personality-based uname release overrides are not implemented.
     write_user_value(current_user_token(), name, &LinuxUtsName::current())?;
     Ok(0)
+}
+
+pub fn sys_times(tms: *mut LinuxTms) -> SysResult {
+    if !tms.is_null() {
+        let linux_tms = LinuxTms::from_cpu_times(current_process().cpu_times_snapshot());
+        write_user_value(current_user_token(), tms, &linux_tms)?;
+    }
+    Ok(clock_ticks_to_isize(get_time_clock_ticks()))
 }
 
 pub fn sys_clone(flags: usize, stack: usize, ptid: usize, tls: usize, ctid: usize) -> SysResult {
