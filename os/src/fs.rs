@@ -110,7 +110,10 @@ pub fn list_apps() {
 
 pub(crate) use inode::open_file_at;
 pub use inode::{OpenFlags, open_file};
-pub(crate) use inode::{lookup_dir_at, mkdir_at, stat_at, unlink_file_at};
+pub(crate) use inode::{
+    lookup_dir_at, lookup_mount_target_dir_at, mkdir_at, stat_at, unlink_file_at,
+};
+pub(crate) use mount::{MountError, mount_block_device_at, unmount_at};
 pub(crate) use path::{WorkingDir, normalize_path};
 pub use pipe::make_pipe;
 pub use stdio::{Stdin, Stdout};

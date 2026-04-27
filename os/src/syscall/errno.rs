@@ -14,15 +14,19 @@ pub enum SysError {
     ENOMEM = 12,
     EACCES = 13,
     EFAULT = 14,
+    ENOTBLK = 15,
+    EBUSY = 16,
+    ENODEV = 19,
     ENOTDIR = 20,
     EISDIR = 21,
     EINVAL = 22,
     EMFILE = 24,
     ENOTTY = 25,
+    ERANGE = 34,
+    ENAMETOOLONG = 36,
     ENOSYS = 38,
     ENOTEMPTY = 39,
     ELOOP = 40,
-    ERANGE = 34,
 }
 
 pub type SysResult<T = isize> = Result<T, SysError>;
