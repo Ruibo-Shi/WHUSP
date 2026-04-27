@@ -82,9 +82,9 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     // the process should terminate at once
     if tid == 0 {
         let pid = process.getpid();
-        if pid == IDLE_PID {
+        if pid == IDLE_PID || Arc::ptr_eq(&process, &INITPROC) {
             println!(
-                "[kernel] Idle process exit with exit_code {} ...",
+                "[kernel] init process exit with exit_code {} ...",
                 exit_code
             );
             if exit_code != 0 {

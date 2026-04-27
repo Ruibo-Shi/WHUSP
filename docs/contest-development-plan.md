@@ -40,7 +40,7 @@
 - [ ] 根据 `/musl/basic/run-all.sh` 输出继续补齐（2026-04-27）
   - [x] 当前已跑通（至少 basic 用例已观察通过）：`brk` / `chdir` / `clone` / `close` / `dup2` / `execve` / `exit` / `fork` / `fstat` / `getcwd` / `getdents64` / `getpid` / `mkdirat` / `mmap` / `munmap` / `openat` / `pipe` / `read` / `unlinkat` / `wait4(wait/waitpid)` / `write` / `yield`
   - [ ] `dup` 语义仍异常（`test_dup` 触发 assert）
-  - [ ] `getppid(173)` 仍异常（`test_getppid` 输出 error）
+  - [x] `getppid(173)` 已补齐（`test_getppid` 输出 success）
   - [ ] `gettimeofday(169)` 语义仍不兼容（`test_gettimeofday` 输出 error）
   - [ ] `sleep` 相关语义仍不兼容（`test_sleep` 触发 assert）
   - [ ] `times(153)` 未补齐（`test_times` 触发 assert）

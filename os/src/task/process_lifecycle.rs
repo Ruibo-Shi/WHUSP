@@ -120,12 +120,22 @@ impl ProcessControlBlock {
     }
 
     /// Only support processes with a single thread.
-    pub fn fork(self: &Arc<Self>) -> Arc<Self> {
-        let mut parent = self.inner_exclusive_access();
+    pub fn fork(self: &Arc<Self>, child_parent: Arc<Self>) -> Arc<Self> {
+        let parent = self.inner_exclusive_access();
         assert_eq!(parent.thread_count(), 1);
         let memory_set = MemorySet::from_existed_user(&parent.memory_set);
         let pid = pid_alloc();
         let new_fd_table = parent.fd_table.clone();
+        let cwd = parent.cwd;
+        let cwd_path = parent.cwd_path.clone();
+        let ustack_base = parent
+            .get_task(0)
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .ustack_base();
+        drop(parent);
 
         let child = Arc::new(Self {
             pid,
@@ -133,9 +143,9 @@ impl ProcessControlBlock {
                 UPIntrFreeCell::new(ProcessControlBlockInner {
                     is_zombie: false,
                     memory_set,
-                    cwd: parent.cwd,
-                    cwd_path: parent.cwd_path.clone(),
-                    parent: Some(Arc::downgrade(self)),
+                    cwd,
+                    cwd_path,
+                    parent: Some(Arc::downgrade(&child_parent)),
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
@@ -148,17 +158,14 @@ impl ProcessControlBlock {
                 })
             },
         });
-        parent.children.push(Arc::clone(&child));
+        child_parent
+            .inner_exclusive_access()
+            .children
+            .push(Arc::clone(&child));
 
         let task = Arc::new(TaskControlBlock::new(
             Arc::clone(&child),
-            parent
-                .get_task(0)
-                .inner_exclusive_access()
-                .res
-                .as_ref()
-                .unwrap()
-                .ustack_base(),
+            ustack_base,
             false,
         ));
         let mut child_inner = child.inner_exclusive_access();
