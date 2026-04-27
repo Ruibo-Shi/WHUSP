@@ -23,6 +23,7 @@ const SYSCALL_EXIT: usize = 93;
 const SYSCALL_EXIT_GROUP: usize = 94;
 const SYSCALL_WAITID: usize = 95;
 const SYSCALL_NANOSLEEP: usize = 101;
+const SYSCALL_CLOCK_NANOSLEEP: usize = 115;
 const SYSCALL_SCHED_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
 const SYSCALL_UNAME: usize = 160;
@@ -131,7 +132,16 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as i32,
             args[4] as *mut RUsage,
         ),
-        SYSCALL_NANOSLEEP => Ok(sys_nanosleep_ms_compat(args[0])),
+        SYSCALL_NANOSLEEP => sys_nanosleep(
+            args[0] as *const LinuxTimeSpec,
+            args[1] as *mut LinuxTimeSpec,
+        ),
+        SYSCALL_CLOCK_NANOSLEEP => sys_clock_nanosleep(
+            args[0] as i32,
+            args[1] as u32,
+            args[2] as *const LinuxTimeSpec,
+            args[3] as *mut LinuxTimeSpec,
+        ),
         SYSCALL_SCHED_YIELD => Ok(sys_sched_yield()),
         SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
         SYSCALL_UNAME => sys_uname(args[0] as *mut LinuxUtsName),
