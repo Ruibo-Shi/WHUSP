@@ -74,6 +74,15 @@ pub fn mkdir(path: &str, mode: u32) -> isize {
 pub fn unlink(path: &str) -> isize {
     compat_ret(sys_unlinkat(AT_FDCWD, path, 0))
 }
+pub fn mount(source: &str, target: &str, fstype: &str, flags: usize, data: *const u8) -> isize {
+    compat_ret(sys_mount(source, target, fstype, flags, data))
+}
+pub fn umount(target: &str) -> isize {
+    compat_ret(sys_umount2(target, 0))
+}
+pub fn umount2(target: &str, flags: i32) -> isize {
+    compat_ret(sys_umount2(target, flags))
+}
 pub fn getdents64(fd: usize, buf: &mut [u8]) -> isize {
     compat_ret(sys_getdents64(fd, buf.as_mut_ptr(), buf.len()))
 }
