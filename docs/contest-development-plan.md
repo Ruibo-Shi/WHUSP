@@ -137,6 +137,53 @@
   - [ ] pipeline 复现不 panic，重复运行 5 次不死锁
   - [ ] `basic-musl` 文件系统相关用例全部通过：`open/openat/read/write/getdents/fstat/mkdir/unlink/chdir/getcwd/mount/umount/pipe/execve`
 
+## P2.7 — syscall 层瘦身路线图（让 syscall 只做 ABI adapter）
+
+- [ ] 阶段 0：冻结边界规则
+  - [ ] 记录目标调用形态：`trap -> syscall dispatcher -> syscall adapter -> kernel subsystem`
+  - [ ] 明确 syscall adapter 只允许做：参数取值、用户指针复制、flag/errno 转换、fd 引用获取、调用子系统
+  - [ ] 明确 syscall adapter 不应长期承载：ELF/shebang 装载策略、VFS 路径遍历、底层文件系统细节、调度策略、缓存策略
+  - [ ] 给 `os/src/syscall.rs` 加审计注释：新增 Linux syscall 时常量名必须对齐 `__NR_*`
+  - [ ] 全量 grep 当前宽逻辑：`process.rs` 的 `execve` 装载、`fs/user_ptr.rs`、`fs/fd.rs`、`fs/path.rs`
+- [ ] 阶段 1：先把通用 uaccess 从 fs syscall 中拆出
+  - [ ] 新建 `os/src/mm/uaccess.rs` 或 `os/src/uaccess.rs`
+  - [ ] 迁移 `translated_byte_buffer_checked/read_user_value/write_user_value/read_user_usize`
+  - [ ] 保持旧调用点行为不变，只调整 import 路径
+  - [ ] 给读/写权限检查保留 `UserBufferAccess::{Read, Write}`
+  - [ ] 验证 `read/write/readv/writev/pipe2/gettimeofday/newfstatat` 不回退
+- [ ] 阶段 2：拆出 exec 装载层
+  - [ ] 新建 `os/src/loader/` 或扩展 `os/src/task/exec.rs`
+  - [ ] 把 `ELF_MAGIC`、shebang 解析、递归限制、解释器 argv 重写迁出 `syscall/process.rs`
+  - [ ] 将入口整理成 `do_execve(path, argv, envp) -> SysResult`
+  - [ ] syscall 层只保留 `copy path/argv/envp from user -> do_execve`
+  - [ ] 保留 BusyBox fallback，但用 `// CONTEXT:` 标清它是 contest test-disk 兼容策略
+  - [ ] 验证 ELF 直接执行、脚本执行、`/musl/busybox sh`、无 shebang 脚本的错误路径
+- [ ] 阶段 3：收敛 fd table 操作
+  - [ ] 在 `task` 或 `fs/fd_table.rs` 提供 `fd_get/fd_alloc/fd_install/fd_close/fd_dup/fd_set_flags`
+  - [ ] syscall 层不再直接遍历 `process.inner.fd_table`
+  - [ ] 保持 `FdTableEntry` 承载 fd flags 与 status flags
+  - [ ] 将 `dup/dup3/fcntl/pipe2/openat/close` 改为调用统一 fd table API
+  - [ ] 验证 `dup`、`dup3(O_CLOEXEC)`、`fcntl(F_GETFD/F_SETFD/F_GETFL/F_SETFL)`、`pipe2`
+- [ ] 阶段 4：把路径 syscall 变成 VFS adapter
+  - [ ] 等 P2.6 的最小 VFS 对象层落地后再开始本阶段
+  - [ ] `sys_openat/chdir/mkdirat/unlinkat/getdents64/newfstatat` 只做 ABI 参数处理
+  - [ ] 路径基准目录选择统一下沉到 `vfs_at(dirfd, path)` 一类函数
+  - [ ] syscall 层不再直接调用 `open_file_at/stat_at/lookup_dir_at`
+  - [ ] 验证 cwd、dirfd、绝对路径、相对路径、mount crossing、错误码
+- [ ] 阶段 5：整理 UAPI 类型和 syscall 命名
+  - [ ] 将 Linux ABI 结构体集中放在 `os/src/syscall/uapi.rs` 或按域拆分 `syscall/*/uapi.rs`
+  - [ ] 内核 syscall 常量名全部对齐 Linux `__NR_*`：如 `GETTIMEOFDAY/EXECVE/SCHED_YIELD/NEWFSTATAT`
+  - [ ] 仓库私有 syscall 必须集中在 private range，并注释“不属于 Linux ABI”
+  - [ ] 用户库便利 API 可以保留旧名，但底层 syscall 号常量必须用标准名
+  - [ ] 每个语义不完整 syscall 保留精确 `// UNFINISHED:`，兼容策略保留精确 `// CONTEXT:`
+- [ ] 阶段 6：建立防回退检查
+  - [ ] 加一个 `rg` 检查脚本：禁止新增 `SYSCALL_GET_TIME/SYSCALL_EXEC/SYSCALL_SLEEP/SYSCALL_YIELD`
+  - [ ] 加一个 `rg` 检查脚本：禁止在 `syscall/` 新增大块 ELF/shebang/VFS backend 逻辑
+  - [ ] `make fmt`
+  - [ ] `make all`
+  - [ ] `make run-rv-dev`
+  - [ ] `make run-rv` 下抽测 `/musl/basic/gettimeofday`、`/musl/basic/pipe`、BusyBox shell、pipeline 复现命令
+
 ## P3 — 扩展 libc 与动态链接
 
 - [ ] 推进 `busybox` 需要的 shell / pipe / 重定向语义

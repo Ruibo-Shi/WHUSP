@@ -54,6 +54,13 @@ struct TimeVal {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+struct TimeSpec {
+    sec: isize,
+    nsec: isize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct SigInfo {
     pub si_signo: i32,
     pub si_errno: i32,
@@ -238,7 +245,14 @@ pub fn sys_exit(exit_code: i32) -> ! {
 }
 
 pub fn sys_sleep(sleep_ms: usize) -> isize {
-    syscall(SYSCALL_NANOSLEEP, [sleep_ms, 0, 0, 0, 0, 0])
+    let request = TimeSpec {
+        sec: (sleep_ms / 1000) as isize,
+        nsec: ((sleep_ms % 1000) * 1_000_000) as isize,
+    };
+    syscall(
+        SYSCALL_NANOSLEEP,
+        [&request as *const TimeSpec as usize, 0, 0, 0, 0, 0],
+    )
 }
 
 pub fn sys_yield() -> isize {

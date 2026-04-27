@@ -93,7 +93,7 @@ fn copy_to_user(token: usize, ptr: *mut u8, src: &[u8]) -> SysResult<()> {
     Ok(())
 }
 
-pub(super) fn read_user_value<T: Copy>(token: usize, ptr: *const T) -> SysResult<T> {
+pub(in crate::syscall) fn read_user_value<T: Copy>(token: usize, ptr: *const T) -> SysResult<T> {
     let mut value = MaybeUninit::<T>::uninit();
     let bytes =
         unsafe { core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>()) };

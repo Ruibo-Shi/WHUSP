@@ -27,6 +27,7 @@ pub enum SysError {
     ENOSYS = 38,
     ENOTEMPTY = 39,
     ELOOP = 40,
+    ENOTSUP = 95,
 }
 
 pub type SysResult<T = isize> = Result<T, SysError>;
