@@ -113,14 +113,40 @@ impl PageTable {
     #[allow(unused)]
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
         let pte = self.find_pte_create(vpn).unwrap();
-        assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
-        *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+        assert!(pte.bits == 0, "vpn {:?} is mapped before mapping", vpn);
+        let leaf_flags = PTEFlags::R | PTEFlags::W | PTEFlags::X;
+        let flags = if flags.intersects(leaf_flags) {
+            flags | PTEFlags::V
+        } else {
+            flags
+        };
+        *pte = PageTableEntry::new(ppn, flags);
     }
     #[allow(unused)]
     pub fn unmap(&mut self, vpn: VirtPageNum) {
         let pte = self.find_pte(vpn).unwrap();
-        assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
+        assert!(
+            pte.is_valid() || pte.bits != 0,
+            "vpn {:?} is invalid before unmapping",
+            vpn
+        );
         *pte = PageTableEntry::empty();
+    }
+    pub fn remap_flags(&mut self, vpn: VirtPageNum, flags: PTEFlags) -> bool {
+        let Some(pte) = self.find_pte(vpn) else {
+            return false;
+        };
+        if !pte.is_valid() && pte.bits == 0 {
+            return false;
+        }
+        let leaf_flags = PTEFlags::R | PTEFlags::W | PTEFlags::X;
+        let flags = if flags.intersects(leaf_flags) {
+            flags | PTEFlags::V
+        } else {
+            flags
+        };
+        *pte = PageTableEntry::new(pte.ppn(), flags);
+        true
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)

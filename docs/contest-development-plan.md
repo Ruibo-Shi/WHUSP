@@ -221,10 +221,55 @@
 
 ## P5 — LoongArch
 
-- [ ] 给 LoongArch 提前保留根构建入口和最小验证脚本（可并行）
-- [ ] 推进 LoongArch 最小可构建路径
-- [ ] 推进 LoongArch 最小可启动路径
-- [ ] 推进 LoongArch 的 submit runner 闭环
+- [ ] 阶段 0：冻结 LoongArch 采用路线
+  - [ ] 记录结论：采用 `RocketOS` 风格的内置 `arch/` 拆分作为主线，吸收 `NighthawkOS` 的小 HAL facade 组织方式
+  - [ ] 记录结论：`reference-project/polyhal` 只作为设计/代码参考，不先接入完整 `polyhal-boot` / `polyhal-trap` / `polyhal` runtime
+  - [ ] 复查可借用点：LoongArch `_start`、DMW/MMU 初始化、TLB refill、CSR timer、GED shutdown、virtio-pci 块设备、syscall register ABI
+- [ ] 阶段 1：先做 RISC-V 行为不变的架构拆分
+  - [ ] 新增 `os/src/arch/mod.rs`，用 `#[cfg(target_arch = ...)]` 选择 `riscv64` / `loongarch64`
+  - [ ] 新增 `os/src/arch/riscv64/`，先迁入当前 `entry.asm`、`trap.rs` + `trap/`、`timer.rs`、`sbi.rs`、`boards/qemu.rs`
+  - [ ] 让 generic kernel 只通过 `crate::arch` 调用低层入口：board init、irq dispatch、timer、shutdown、trap init、page-table/TLB helper
+  - [ ] 保持当前 RISC-V 启动契约不变：`rust_main(hart_id, dtb_addr)`、DTB 解析、可选设备日志、`x0/x1` 磁盘顺序、EXT4 根挂载
+  - [ ] 第一轮不引入 proc macro；只有重复 `cfg` 变多后再考虑本地化 `define_arch_mods!()` 风格宏
+  - [ ] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv-dev`、`make run-rv`
+- [ ] 阶段 2：打通 LoongArch 构建与提交产物
+  - [ ] 根 `Makefile` 支持 `ARCH=loongarch64`，新增 `kernel-la` 目标
+  - [ ] 根 `make all` 同时产出 `kernel-rv` 和 `kernel-la`，但不破坏当前 `kernel-rv` / `disk.img` 缓存规则
+  - [ ] `os/Makefile` 支持 `loongarch64-unknown-none`、`qemu-system-loongarch64`、`virtio-blk-pci`、`virtio-net-pci`
+  - [ ] 新增 `os/src/linker-loongarch64.ld` 或等价 linker 生成规则；不要复用 RISC-V `linker-qemu.ld`
+  - [ ] `user/Makefile` 支持 `loongarch64-unknown-none`
+  - [ ] `user` 侧 syscall wrapper 增加 LoongArch 汇编路径和寄存器约定
+  - [ ] 将 LoongArch 所需 crate/toolchain 依赖纳入离线构建路径，避免 `make all` 下载网络依赖
+- [ ] 阶段 3：LoongArch 最小内核可启动
+  - [ ] 实现 `arch/loongarch64/entry`：设置 boot stack、DMW/早期地址映射、必要 FP/扩展使能，并跳入统一 Rust 入口
+  - [ ] 实现 `arch/loongarch64/console`：先保证 QEMU `-nographic` 下能输出 boot log
+  - [ ] 实现 `arch/loongarch64/shutdown`：QEMU virt GED `0x100E001C <- 0x34`
+  - [ ] 实现 `arch/loongarch64/time`：读取 counter、设置 one-shot timer、打开 timer interrupt
+  - [ ] 实现 `arch/loongarch64/trap`：kernel trap、user trap、syscall trap、timer trap、external irq trap 的最小闭环
+  - [ ] 实现 `arch/loongarch64/mm`：页表 PTE flag 转换、页表切换、TLB flush、TLB refill 入口
+  - [ ] 实现 `arch/loongarch64/context`：TrapContext / task context switch / trap return，保证 `fork/execve/wait4` 基础路径可接上
+  - [ ] 验证 QEMU LoongArch 能启动到内核日志，并能主动 shutdown
+- [ ] 阶段 4：LoongArch 设备与文件系统路径
+  - [ ] 明确 QEMU LoongArch virt 设备模型：块设备优先走 PCI virtio，而不是 RISC-V 的 MMIO virtio
+  - [ ] 接入 LoongArch PCI/virtio block 发现，至少识别 `x0 = sdcard-la.img`
+  - [ ] 保持文件系统上层接口不分叉：LoongArch 复用当前 EXT4 / mount / path / fd 逻辑
+  - [ ] 验证从 `sdcard-la.img` 挂载根目录并读取 `/musl`、`/glibc`、测试脚本
+  - [ ] 验证 optional `x1` 辅助盘在 LoongArch 下的动态挂载路径
+- [ ] 阶段 5：LoongArch 用户态与 submit runner
+  - [ ] 产出 LoongArch 用户程序 ELF，并确认 ELF loader 识别 `EM_LOONGARCH`
+  - [ ] 对齐 LoongArch 用户态入口、栈、TLS、syscall 返回值、errno 负值约定
+  - [ ] 补齐 LoongArch musl BusyBox 启动所需的动态链接器路径或兼容路径
+  - [ ] 新增或泛化 submit runner：同一套 runner 能按 `basic-musl` / `busybox-musl` / `glibc` 等组名输出精确 marker
+  - [ ] 验证 `submit-la` 或等价入口按固定顺序串行执行测试组，并在结束后主动 shutdown
+- [ ] 阶段 6：LoongArch 验收门槛
+  - [ ] `make fmt`
+  - [ ] `make kernel-rv`
+  - [ ] `make kernel-la`
+  - [ ] `make all`
+  - [ ] `CARGO_NET_OFFLINE=true make all`
+  - [ ] `make run-rv` 不回退
+  - [ ] `make run-la` 或等价命令能启动 `sdcard-la.img`
+  - [ ] 官方 contest Docker 中验证 `kernel-rv`、`kernel-la`、`disk.img` 产物名正确
 
 ## 基础设施与并行研究
 

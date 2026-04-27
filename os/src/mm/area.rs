@@ -23,6 +23,21 @@ pub(super) struct MmapInfo {
     pub(super) backing_file: Option<Arc<dyn File + Send + Sync>>,
 }
 
+impl MmapInfo {
+    fn split_off(&mut self, offset: usize) -> Self {
+        assert!(offset < self.len);
+        let right = Self {
+            shared: self.shared,
+            writable: self.writable,
+            len: self.len - offset,
+            file_offset: self.file_offset + offset,
+            backing_file: self.backing_file.clone(),
+        };
+        self.len = offset;
+        right
+    }
+}
+
 impl MapArea {
     pub(super) fn new(
         start_va: VirtAddr,
@@ -49,6 +64,43 @@ impl MapArea {
             map_perm: another.map_perm,
             mmap_info: another.mmap_info.clone(),
         }
+    }
+
+    pub(super) fn split_off(&mut self, at: VirtPageNum) -> Option<Self> {
+        let start = self.vpn_range.get_start();
+        let end = self.vpn_range.get_end();
+        if at <= start || at >= end {
+            return None;
+        }
+
+        let right_mmap_info = self
+            .mmap_info
+            .as_mut()
+            .map(|info| info.split_off((at.0 - start.0) * PAGE_SIZE));
+        let right = Self {
+            vpn_range: VPNRange::new(at, end),
+            data_frames: self.data_frames.split_off(&at),
+            map_type: self.map_type,
+            map_perm: self.map_perm,
+            mmap_info: right_mmap_info,
+        };
+        self.vpn_range = VPNRange::new(start, at);
+        Some(right)
+    }
+
+    pub(super) fn remap_permission(
+        &mut self,
+        page_table: &mut PageTable,
+        permission: MapPermission,
+    ) -> bool {
+        let pte_flags = PTEFlags::from_bits(permission.bits()).unwrap();
+        for vpn in self.vpn_range {
+            if !page_table.remap_flags(vpn, pte_flags) {
+                return false;
+            }
+        }
+        self.map_perm = permission;
+        true
     }
 
     pub(super) fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {

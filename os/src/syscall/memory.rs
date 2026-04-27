@@ -1,5 +1,5 @@
 use crate::config::PAGE_SIZE;
-use crate::mm::MapPermission;
+use crate::mm::{MapPermission, MemoryProtectError};
 use crate::task::current_process;
 
 use super::errno::{SysError, SysResult};
@@ -59,16 +59,7 @@ fn sys_mmap_impl(
     let shared = map_type == MAP_SHARED;
     let anonymous = flags & MAP_ANONYMOUS != 0;
     let writable = prot & PROT_WRITE != 0;
-    let mut permission = MapPermission::U;
-    if prot & PROT_READ != 0 || writable {
-        permission |= MapPermission::R;
-    }
-    if writable {
-        permission |= MapPermission::W;
-    }
-    if prot & PROT_EXEC != 0 {
-        permission |= MapPermission::X;
-    }
+    let permission = prot_to_map_permission(prot);
 
     let process = current_process();
     let backing_file = if anonymous {
@@ -102,6 +93,34 @@ fn sys_mmap_impl(
         .ok_or(SysError::ENOMEM)
 }
 
+pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> SysResult {
+    if addr % PAGE_SIZE != 0 {
+        return Err(SysError::EINVAL);
+    }
+    if len == 0 {
+        return Ok(0);
+    }
+    // UNFINISHED: Linux also has architecture-specific PROT flags and growable
+    // VMA flags; this kernel currently supports only read/write/exec/none.
+    if prot & !PROT_MASK != 0 {
+        return Err(SysError::EINVAL);
+    }
+
+    let len = len.checked_add(PAGE_SIZE - 1).ok_or(SysError::ENOMEM)? & !(PAGE_SIZE - 1);
+    addr.checked_add(len).ok_or(SysError::ENOMEM)?;
+
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+    inner
+        .memory_set
+        .mprotect_area(addr, len, prot_to_map_permission(prot))
+        .map_err(|err| match err {
+            MemoryProtectError::Unmapped => SysError::ENOMEM,
+            MemoryProtectError::AccessDenied => SysError::EACCES,
+        })?;
+    Ok(0)
+}
+
 pub fn sys_munmap(addr: usize, len: usize) -> SysResult {
     if len == 0 || addr % PAGE_SIZE != 0 {
         return Err(SysError::EINVAL);
@@ -113,4 +132,19 @@ pub fn sys_munmap(addr: usize, len: usize) -> SysResult {
     } else {
         Err(SysError::EINVAL)
     }
+}
+
+fn prot_to_map_permission(prot: usize) -> MapPermission {
+    let writable = prot & PROT_WRITE != 0;
+    let mut permission = MapPermission::U;
+    if prot & PROT_READ != 0 || writable {
+        permission |= MapPermission::R;
+    }
+    if writable {
+        permission |= MapPermission::W;
+    }
+    if prot & PROT_EXEC != 0 {
+        permission |= MapPermission::X;
+    }
+    permission
 }
