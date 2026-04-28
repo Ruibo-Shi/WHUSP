@@ -1,5 +1,4 @@
 mod clone;
-mod context;
 mod exec;
 mod fd;
 mod id;
@@ -9,21 +8,20 @@ mod process;
 mod process_lifecycle;
 mod processor;
 mod signal;
-mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
 use self::id::TaskUserRes;
+use crate::arch::__switch;
 use crate::sbi::shutdown;
 use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
 use log::info;
 use manager::fetch_task;
 pub use process::{ProcessControlBlock, ProcessCpuTimesSnapshot};
-use switch::__switch;
 
+pub use crate::arch::TaskContext;
 pub use clone::{CloneArgs, CloneFlags, clone_current_thread};
-pub use context::TaskContext;
 pub(crate) use fd::{FD_LIMIT, FdFlags, FdTableEntry};
 pub use id::{IDLE_PID, KernelStack, PidHandle, kstack_alloc, pid_alloc};
 pub use manager::{add_task, pid2process, remove_from_pid2process, wakeup_task};

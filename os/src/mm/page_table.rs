@@ -1,4 +1,5 @@
 use super::{FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, frame_alloc};
+use crate::arch::mm as arch_mm;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -70,7 +71,7 @@ impl PageTable {
     /// Temporarily used to get arguments from user space.
     pub fn from_token(satp: usize) -> Self {
         Self {
-            root_ppn: PhysPageNum::from(satp & ((1usize << 44) - 1)),
+            root_ppn: PhysPageNum::from(arch_mm::page_table_root_ppn(satp)),
             frames: Vec::new(),
         }
     }
@@ -160,7 +161,7 @@ impl PageTable {
         })
     }
     pub fn token(&self) -> usize {
-        8usize << 60 | self.root_ppn.0
+        arch_mm::page_table_token(self.root_ppn.0)
     }
 }
 

@@ -1,12 +1,11 @@
 use super::__switch;
 use super::{ProcessControlBlock, TaskContext, TaskControlBlock};
 use super::{TaskStatus, fetch_task};
+use crate::arch::hart;
 use crate::sync::UPIntrFreeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
-use core::arch::asm;
 use lazy_static::*;
-use riscv::register::sstatus;
 
 pub struct Processor {
     current: Option<Arc<TaskControlBlock>>,
@@ -54,10 +53,7 @@ pub fn run_tasks() {
             }
         } else {
             drop(processor);
-            unsafe {
-                sstatus::set_sie();
-                asm!("wfi");
-            }
+            hart::enable_interrupt_and_wait();
         }
     }
 }
@@ -101,9 +97,7 @@ pub fn current_kstack_top() -> usize {
     if let Some(task) = current_task() {
         task.kstack.get_top()
     } else {
-        let mut boot_stack_top;
-        unsafe { asm!("la {},boot_stack_top",out(reg) boot_stack_top) };
-        boot_stack_top
+        hart::boot_stack_top()
     }
     // current_task().unwrap().kstack.get_top()
 }

@@ -1,6 +1,5 @@
 use crate::sbi::shutdown;
 use crate::task::current_kstack_top;
-use core::arch::asm;
 use core::panic::PanicInfo;
 use log::*;
 
@@ -21,11 +20,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 fn backtrace() {
-    let mut fp: usize;
+    let mut fp = crate::arch::backtrace::frame_pointer();
     let stop = current_kstack_top();
-    unsafe {
-        asm!("mv {}, s0", out(reg) fp);
-    }
     println!("---START BACKTRACE---");
     for i in 0..10 {
         if fp == stop {

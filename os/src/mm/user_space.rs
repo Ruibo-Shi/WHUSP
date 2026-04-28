@@ -4,11 +4,11 @@ use super::{
     FrameTracker, MapArea, MapPermission, MapType, MemorySet, MmapFlush, VPNRange, VirtAddr,
 };
 use super::{VirtPageNum, frame_alloc};
+use crate::arch::mm as arch_mm;
 use crate::config::{PAGE_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT};
 use crate::fs::File;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::arch::asm;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryProtectError {
@@ -270,9 +270,7 @@ impl MemorySet {
         if !touched {
             return Err(MemoryProtectError::Unmapped);
         }
-        unsafe {
-            asm!("sfence.vma");
-        }
+        arch_mm::flush_tlb_all();
         Ok(())
     }
 

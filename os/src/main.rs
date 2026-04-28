@@ -10,11 +10,9 @@ extern crate bitflags;
 
 use log::*;
 
-#[path = "boards/qemu.rs"]
-mod board;
-
 #[macro_use]
 mod console;
+mod arch;
 mod config;
 mod drivers;
 mod fs;
@@ -22,18 +20,15 @@ mod lang_items;
 mod logging;
 mod mm;
 mod net;
-mod sbi;
 mod sync;
 mod syscall;
 mod task;
-mod timer;
-mod trap;
+
+pub(crate) use arch::{board, sbi, timer, trap};
 
 use crate::drivers::chardev::CharDevice;
 use crate::drivers::chardev::UART;
 use core::sync::atomic::{AtomicUsize, Ordering};
-
-core::arch::global_asm!(include_str!("entry.asm"));
 
 fn clear_bss() {
     unsafe extern "C" {

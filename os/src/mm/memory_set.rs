@@ -1,7 +1,6 @@
 use super::{MapArea, MapPermission, MapType, PageTable, PageTableEntry, VirtAddr, VirtPageNum};
+use crate::arch::mm as arch_mm;
 use alloc::vec::Vec;
-use core::arch::asm;
-use riscv::register::satp;
 
 // TODO: replace vec to a high perfermonce data structure
 pub struct MemorySet {
@@ -72,11 +71,7 @@ impl MemorySet {
         self.areas.push(map_area);
     }
     pub fn activate(&self) {
-        let satp = self.page_table.token();
-        unsafe {
-            satp::write(satp);
-            asm!("sfence.vma");
-        }
+        arch_mm::activate_page_table(self.page_table.token());
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
