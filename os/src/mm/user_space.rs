@@ -1,15 +1,61 @@
 use super::address::page_align_up;
 use super::area::MmapInfo;
-use super::{MapArea, MapPermission, MapType, MemorySet, VPNRange, VirtAddr};
+use super::{
+    FrameTracker, MapArea, MapPermission, MapType, MemorySet, MmapFlush, VPNRange, VirtAddr,
+};
+use super::{VirtPageNum, frame_alloc};
 use crate::config::{PAGE_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT};
 use crate::fs::File;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::arch::asm;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryProtectError {
     Unmapped,
     AccessDenied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MmapFaultAccess {
+    Read,
+    Write,
+    Execute,
+}
+
+impl MmapFaultAccess {
+    fn is_allowed_by(self, permission: MapPermission) -> bool {
+        match self {
+            Self::Read => permission.contains(MapPermission::R),
+            Self::Write => permission.contains(MapPermission::W),
+            Self::Execute => permission.contains(MapPermission::X),
+        }
+    }
+}
+
+pub enum MmapFaultResult {
+    Handled,
+    Page(MmapFaultPage),
+}
+
+pub struct MmapFaultPage {
+    vpn: VirtPageNum,
+    file_offset: usize,
+    read_len: usize,
+    backing_file: Option<Arc<dyn File + Send + Sync>>,
+}
+
+impl MmapFaultPage {
+    pub fn build_frame(&self) -> Option<FrameTracker> {
+        let frame = frame_alloc()?;
+        if let Some(file) = &self.backing_file {
+            if self.read_len > 0 {
+                let dst = &mut frame.ppn.get_bytes_array()[..self.read_len];
+                file.read_at(self.file_offset, dst);
+            }
+        }
+        Some(frame)
+    }
 }
 
 impl MemorySet {
@@ -23,13 +69,33 @@ impl MemorySet {
         memory_set.map_trampoline();
         for area in &user_space.areas {
             let new_area = MapArea::from_another(area);
-            memory_set.push(new_area, None);
-            for vpn in area.vpn_range {
-                let src_ppn = user_space.translate(vpn).unwrap().ppn();
-                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
-                dst_ppn
-                    .get_bytes_array()
-                    .copy_from_slice(src_ppn.get_bytes_array());
+            if area.is_mmap() {
+                // UNFINISHED: Linux keeps MAP_SHARED file mappings backed by
+                // shared page cache after fork; this kernel copies only resident
+                // pages and keeps lazy metadata for not-yet-faulted pages.
+                memory_set.areas.push(new_area);
+                let area_idx = memory_set.areas.len() - 1;
+                let resident_vpns: Vec<_> = area.data_frames.keys().copied().collect();
+                for vpn in resident_vpns {
+                    let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                    let frame = frame_alloc().unwrap();
+                    frame
+                        .ppn
+                        .get_bytes_array()
+                        .copy_from_slice(src_ppn.get_bytes_array());
+                    let page_table = &mut memory_set.page_table;
+                    let dst_area = &mut memory_set.areas[area_idx];
+                    dst_area.map_existing_frame(page_table, vpn, frame);
+                }
+            } else {
+                memory_set.push(new_area, None);
+                for vpn in area.vpn_range {
+                    let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                    let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                    dst_ppn
+                        .get_bytes_array()
+                        .copy_from_slice(src_ppn.get_bytes_array());
+                }
             }
         }
         memory_set
@@ -82,9 +148,9 @@ impl MemorySet {
         shared: bool,
         writable: bool,
     ) -> Option<usize> {
-        let len = page_align_up(len);
-        let start = self.alloc_mmap_range(len)?;
-        let end = start + len;
+        let map_len = page_align_up(len);
+        let start = self.alloc_mmap_range(map_len)?;
+        let end = start + map_len;
         let mut area = MapArea::new(start.into(), end.into(), MapType::Framed, permission);
         area.mmap_info = Some(MmapInfo {
             shared,
@@ -93,19 +159,59 @@ impl MemorySet {
             file_offset,
             backing_file,
         });
-        area.map(&mut self.page_table);
-        area.load_mmap_data(&self.page_table);
         self.areas.push(area);
         self.mmap_next = end;
         Some(start)
     }
 
-    pub fn munmap_area(&mut self, start: usize, len: usize) -> bool {
-        if len == 0 || start % PAGE_SIZE != 0 {
+    pub fn prepare_mmap_page_fault(
+        &self,
+        addr: usize,
+        access: MmapFaultAccess,
+    ) -> Option<MmapFaultResult> {
+        let vpn = VirtAddr::from(addr).floor();
+        let area = self.areas.iter().find(|area| {
+            area.is_mmap() && area.vpn_range.get_start() <= vpn && vpn < area.vpn_range.get_end()
+        })?;
+        if !access.is_allowed_by(area.map_perm) {
+            return None;
+        }
+        if area.data_frames.contains_key(&vpn)
+            || self.translate(vpn).is_some_and(|pte| pte.bits != 0)
+        {
+            return Some(MmapFaultResult::Handled);
+        }
+
+        let info = area.mmap_info.as_ref().unwrap();
+        let area_offset = (vpn.0 - area.vpn_range.get_start().0) * PAGE_SIZE;
+        let read_len = info.len.saturating_sub(area_offset).min(PAGE_SIZE);
+        Some(MmapFaultResult::Page(MmapFaultPage {
+            vpn,
+            file_offset: info.file_offset + area_offset,
+            read_len,
+            backing_file: info.backing_file.clone(),
+        }))
+    }
+
+    pub fn install_mmap_fault_page(&mut self, page: MmapFaultPage, frame: FrameTracker) -> bool {
+        let Some(idx) = self.areas.iter().position(|area| {
+            area.is_mmap()
+                && area.vpn_range.get_start() <= page.vpn
+                && page.vpn < area.vpn_range.get_end()
+        }) else {
             return false;
+        };
+        let page_table = &mut self.page_table;
+        let area = &mut self.areas[idx];
+        area.map_existing_frame(page_table, page.vpn, frame)
+    }
+
+    pub fn munmap_area(&mut self, start: usize, len: usize) -> Option<Vec<MmapFlush>> {
+        if len == 0 || start % PAGE_SIZE != 0 {
+            return None;
         }
         let Some(end) = start.checked_add(page_align_up(len)) else {
-            return false;
+            return None;
         };
         let start_vpn = VirtAddr::from(start).floor();
         let end_vpn = VirtAddr::from(end).floor();
@@ -114,12 +220,12 @@ impl MemorySet {
                 && area.vpn_range.get_start() == start_vpn
                 && area.vpn_range.get_end() == end_vpn
         }) else {
-            return false;
+            return None;
         };
         let mut area = self.areas.remove(idx);
-        area.flush_mmap_data(&self.page_table);
-        area.unmap(&mut self.page_table);
-        true
+        let flushes = area.collect_mmap_flushes(&self.page_table);
+        area.unmap_resident(&mut self.page_table);
+        Some(flushes)
     }
 
     pub fn mprotect_area(

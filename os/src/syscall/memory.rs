@@ -126,12 +126,17 @@ pub fn sys_munmap(addr: usize, len: usize) -> SysResult {
         return Err(SysError::EINVAL);
     }
     let process = current_process();
-    let mut inner = process.inner_exclusive_access();
-    if inner.memory_set.munmap_area(addr, len) {
-        Ok(0)
-    } else {
-        Err(SysError::EINVAL)
+    let flushes = {
+        let mut inner = process.inner_exclusive_access();
+        inner
+            .memory_set
+            .munmap_area(addr, len)
+            .ok_or(SysError::EINVAL)?
+    };
+    for flush in flushes {
+        flush.write_back();
     }
+    Ok(0)
 }
 
 fn prot_to_map_permission(prot: usize) -> MapPermission {
