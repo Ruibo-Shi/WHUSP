@@ -46,16 +46,14 @@ ifeq ($(ARCH),riscv64)
 		-drive file=$(PRIMARY_DISK),if=none,format=raw,id=x0 \
 		-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -no-reboot \
 		-device virtio-net-device,netdev=net -netdev user,id=net \
-		-rtc base=utc \
-		$(if $(strip $(AUX_DISK)),-drive file=$(AUX_DISK)$(COMMA)if=none$(COMMA)format=raw$(COMMA)id=x1 -device virtio-blk-device$(COMMA)drive=x1$(COMMA)bus=virtio-mmio-bus.1)
+		-rtc base=utc
 else ifeq ($(ARCH),loongarch64)
-	@qemu-system-loongarch64 -kernel $(KERNEL_ELF) -m $(MEM) -nographic -smp $(SMP) \
+	@qemu-system-loongarch64 -machine virt -kernel $(KERNEL_ELF) -m $(MEM) -nographic -smp $(SMP) \
 		-drive file=$(PRIMARY_DISK),if=none,format=raw,id=x0 \
-		-device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0 -no-reboot \
+		-device virtio-blk-pci,drive=x0 -no-reboot \
 		-device virtio-net-pci,netdev=net0 \
 		-netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555 \
-		-rtc base=utc \
-		$(if $(strip $(AUX_DISK)),-drive file=$(AUX_DISK)$(COMMA)if=none$(COMMA)format=raw$(COMMA)id=x1 -device virtio-blk-pci$(COMMA)drive=x1$(COMMA)bus=virtio-mmio-bus.1)
+		-rtc base=utc 
 endif
 
 clean:
