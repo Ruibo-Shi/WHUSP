@@ -157,6 +157,9 @@ impl File for Pipe {
                     return already_read;
                 }
             }
+            if already_read > 0 {
+                return already_read;
+            }
         }
     }
     fn write(&self, buf: UserBuffer) -> usize {

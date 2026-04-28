@@ -101,6 +101,8 @@ pub extern "C" fn rust_main(hart_id: usize, dtb_addr: usize) -> ! {
     fs::init();
     fs::list_apps();
     task::add_initproc();
+    // CONTEXT: Keep boot-time filesystem setup synchronous before the scheduler
+    // runs, then allow task-time block I/O to sleep behind the mount locks.
     *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
     task::run_tasks();
     panic!("Unreachable in rust_main!");
