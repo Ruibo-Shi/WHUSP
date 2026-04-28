@@ -37,9 +37,7 @@ jobs:
       - name: Build RISC-V artifacts in official image
         run: |
           make kernel-rv
-          make disk.img
           test -f kernel-rv
-          test -f disk.img
 
       - name: Boot contest disk when available
         shell: bash
@@ -63,8 +61,6 @@ jobs:
             -device virtio-net-device,netdev=net \
             -netdev user,id=net \
             -rtc base=utc \
-            -drive file=./disk.img,if=none,format=raw,id=x1 \
-            -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1 \
             2>&1 | tee boot.log
           status=${PIPESTATUS[0]}
           set -e

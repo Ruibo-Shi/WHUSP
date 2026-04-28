@@ -22,9 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,12 +34,10 @@ jobs:
         with:
           workspaces: |
             os -> os/target
-            user -> user/target
 
       - name: Check formatting
         run: |
           cargo fmt --manifest-path os/Cargo.toml --all --check
-          cargo fmt --manifest-path user/Cargo.toml --all --check
           rustfmt --check vendor/lwext4_rust/build.rs
 
   official-image-build:
@@ -63,25 +58,21 @@ jobs:
           mkdir -p /usr/riscv64-linux-musl/lib/musl
           ln -sfn /opt/riscv64-linux-musl-cross/riscv64-linux-musl/include /usr/riscv64-linux-musl/lib/musl/include
 
-      - name: Build kernel and user programs
+      - name: Build kernel
         run: |
           make -C os kernel
-          make -C user build
 
-      - name: Build root artifacts
+      - name: Build root kernel artifact
         run: |
           make kernel-rv
-          make disk.img
           test -f kernel-rv
-          test -f disk.img
 
-      - name: Upload root artifacts
+      - name: Upload root kernel artifact
         uses: actions/upload-artifact@v4
         with:
           name: root-rv-artifacts
           path: |
             kernel-rv
-            disk.img
           if-no-files-found: error
 
   makefile-dry-run:
