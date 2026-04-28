@@ -5,6 +5,7 @@ use crate::config::PAGE_SIZE;
 use crate::fs::File;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 pub struct MapArea {
     pub(super) vpn_range: VPNRange,
@@ -12,6 +13,18 @@ pub struct MapArea {
     pub(super) map_type: MapType,
     pub(super) map_perm: MapPermission,
     pub(super) mmap_info: Option<MmapInfo>,
+}
+
+pub struct MmapFlush {
+    file: Arc<dyn File + Send + Sync>,
+    offset: usize,
+    data: Vec<u8>,
+}
+
+impl MmapFlush {
+    pub fn write_back(self) {
+        self.file.write_at(self.offset, &self.data);
+    }
 }
 
 #[derive(Clone)]
@@ -25,15 +38,14 @@ pub(super) struct MmapInfo {
 
 impl MmapInfo {
     fn split_off(&mut self, offset: usize) -> Self {
-        assert!(offset < self.len);
         let right = Self {
             shared: self.shared,
             writable: self.writable,
-            len: self.len - offset,
+            len: self.len.saturating_sub(offset),
             file_offset: self.file_offset + offset,
             backing_file: self.backing_file.clone(),
         };
-        self.len = offset;
+        self.len = self.len.min(offset);
         right
     }
 }
@@ -94,9 +106,17 @@ impl MapArea {
         permission: MapPermission,
     ) -> bool {
         let pte_flags = PTEFlags::from_bits(permission.bits()).unwrap();
-        for vpn in self.vpn_range {
-            if !page_table.remap_flags(vpn, pte_flags) {
-                return false;
+        if self.is_mmap() {
+            for vpn in self.data_frames.keys().copied() {
+                if !page_table.remap_flags(vpn, pte_flags) {
+                    return false;
+                }
+            }
+        } else {
+            for vpn in self.vpn_range {
+                if !page_table.remap_flags(vpn, pte_flags) {
+                    return false;
+                }
             }
         }
         self.map_perm = permission;
@@ -136,6 +156,33 @@ impl MapArea {
         }
     }
 
+    pub(super) fn map_existing_frame(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+        frame: FrameTracker,
+    ) -> bool {
+        if self.data_frames.contains_key(&vpn) {
+            return true;
+        }
+        if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+            return true;
+        }
+        let ppn = frame.ppn;
+        self.data_frames.insert(vpn, frame);
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits()).unwrap();
+        page_table.map(vpn, ppn, pte_flags);
+        true
+    }
+
+    pub(super) fn unmap_resident(&mut self, page_table: &mut PageTable) {
+        let vpns: Vec<_> = self.data_frames.keys().copied().collect();
+        for vpn in vpns {
+            page_table.unmap(vpn);
+        }
+        self.data_frames.clear();
+    }
+
     pub(super) fn copy_data(&mut self, page_table: &PageTable, data: &[u8], data_offset: usize) {
         assert_eq!(self.map_type, MapType::Framed);
         assert!(data_offset < PAGE_SIZE);
@@ -162,52 +209,32 @@ impl MapArea {
         self.mmap_info.is_some()
     }
 
-    pub(super) fn load_mmap_data(&self, page_table: &PageTable) {
+    pub(super) fn collect_mmap_flushes(&self, page_table: &PageTable) -> Vec<MmapFlush> {
+        let mut flushes = Vec::new();
         let Some(info) = &self.mmap_info else {
-            return;
-        };
-        let Some(file) = &info.backing_file else {
-            return;
-        };
-        let mut remaining = info.len;
-        let mut file_offset = info.file_offset;
-        for vpn in self.vpn_range {
-            if remaining == 0 {
-                break;
-            }
-            let copy_len = remaining.min(PAGE_SIZE);
-            let dst = &mut page_table.translate(vpn).unwrap().ppn().get_bytes_array()[..copy_len];
-            let read_size = file.read_at(file_offset, dst);
-            if read_size < copy_len {
-                break;
-            }
-            remaining -= copy_len;
-            file_offset += copy_len;
-        }
-    }
-
-    pub(super) fn flush_mmap_data(&self, page_table: &PageTable) {
-        let Some(info) = &self.mmap_info else {
-            return;
+            return flushes;
         };
         if !info.shared || !info.writable {
-            return;
+            return flushes;
         }
         let Some(file) = &info.backing_file else {
-            return;
+            return flushes;
         };
-        let mut remaining = info.len;
-        let mut file_offset = info.file_offset;
-        for vpn in self.vpn_range {
-            if remaining == 0 {
-                break;
+        let start_vpn = self.vpn_range.get_start();
+        for vpn in self.data_frames.keys().copied() {
+            let area_offset = (vpn.0 - start_vpn.0) * PAGE_SIZE;
+            if area_offset >= info.len {
+                continue;
             }
-            let copy_len = remaining.min(PAGE_SIZE);
+            let copy_len = (info.len - area_offset).min(PAGE_SIZE);
             let src = &page_table.translate(vpn).unwrap().ppn().get_bytes_array()[..copy_len];
-            file.write_at(file_offset, src);
-            remaining -= copy_len;
-            file_offset += copy_len;
+            flushes.push(MmapFlush {
+                file: file.clone(),
+                offset: info.file_offset + area_offset,
+                data: src.to_vec(),
+            });
         }
+        flushes
     }
 }
 

@@ -1,12 +1,13 @@
 mod context;
 
 use crate::config::TRAMPOLINE;
+use crate::mm::{MmapFaultAccess, MmapFaultResult};
 use crate::syscall::syscall;
 use crate::task::{
     SignalFlags, account_current_system_time_until, account_current_user_time_until,
-    check_signals_of_current, current_add_signal, current_trap_cx, current_trap_cx_user_va,
-    current_user_token, exit_current_and_run_next, mark_current_user_time_entry,
-    suspend_current_and_run_next,
+    check_signals_of_current, current_add_signal, current_process, current_trap_cx,
+    current_trap_cx_user_va, current_user_token, exit_current_and_run_next,
+    mark_current_user_time_entry, suspend_current_and_run_next,
 };
 use crate::timer::{check_timer, get_time_us, set_next_trigger};
 use core::arch::{asm, global_asm};
@@ -82,12 +83,24 @@ pub fn trap_handler() -> ! {
             cx = current_trap_cx();
             cx.x[10] = result as usize;
         }
+        Trap::Exception(Exception::StorePageFault) => {
+            if !handle_mmap_page_fault(stval, MmapFaultAccess::Write) {
+                current_add_signal(SignalFlags::SIGSEGV);
+            }
+        }
+        Trap::Exception(Exception::InstructionPageFault) => {
+            if !handle_mmap_page_fault(stval, MmapFaultAccess::Execute) {
+                current_add_signal(SignalFlags::SIGSEGV);
+            }
+        }
+        Trap::Exception(Exception::LoadPageFault) => {
+            if !handle_mmap_page_fault(stval, MmapFaultAccess::Read) {
+                current_add_signal(SignalFlags::SIGSEGV);
+            }
+        }
         Trap::Exception(Exception::StoreFault)
-        | Trap::Exception(Exception::StorePageFault)
         | Trap::Exception(Exception::InstructionFault)
-        | Trap::Exception(Exception::InstructionPageFault)
-        | Trap::Exception(Exception::LoadFault)
-        | Trap::Exception(Exception::LoadPageFault) => {
+        | Trap::Exception(Exception::LoadFault) => {
             /*
             println!(
                 "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.",
@@ -123,6 +136,30 @@ pub fn trap_handler() -> ! {
         exit_current_and_run_next(errno);
     }
     trap_return();
+}
+
+fn handle_mmap_page_fault(addr: usize, access: MmapFaultAccess) -> bool {
+    let process = current_process();
+    let fault = {
+        let inner = process.inner_exclusive_access();
+        inner.memory_set.prepare_mmap_page_fault(addr, access)
+    };
+    let Some(fault) = fault else {
+        return false;
+    };
+    match fault {
+        MmapFaultResult::Handled => true,
+        MmapFaultResult::Page(page) => {
+            // UNFINISHED: Linux reports SIGBUS for some file-backed mmap faults,
+            // such as pages wholly beyond the backing object; this kernel still
+            // collapses mmap fault failures into SIGSEGV.
+            let Some(frame) = page.build_frame() else {
+                return false;
+            };
+            let mut inner = process.inner_exclusive_access();
+            inner.memory_set.install_mmap_fault_page(page, frame)
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
