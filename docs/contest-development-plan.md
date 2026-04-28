@@ -292,14 +292,20 @@
 - [x] 保持当前 RISC-V 启动契约不变。
 - [x] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv-dev`、`make run-rv`。
 
-### 阶段 2：打通 LoongArch 构建与提交产物
+### 阶段 2A：LoongArch 构建入口骨架
 
-- [ ] 根 `Makefile` 支持 `ARCH=loongarch64`，新增 `kernel-la` 目标。
-- [ ] 根 `make all` 同时产出 `kernel-rv` 和 `kernel-la`。
-- [ ] `os/Makefile` 支持 `loongarch64-unknown-none`、`qemu-system-loongarch64`、`virtio-blk-pci`、`virtio-net-pci`。
+- [x] 根 `Makefile` 新增 `kernel-la` 目标，但当前明确失败，不生成假的 LoongArch ELF。
+- [x] 根 `Makefile` 新增 `run-la` 目标，预留 `sdcard-la.img` 和可选 `disk-la.img` 的 QEMU 启动链路。
+- [x] `os/Makefile` 支持 `ARCH=loongarch64` 的 target/QEMU/virtio-pci 变量，并在 `kernel` 目标明确提示 runtime 未实现。
+- [x] `user/Makefile` 对 `ARCH=loongarch64` 明确失败，说明用户态 syscall wrapper 属于阶段 5。
+- [x] `rust-toolchain.toml` 纳入 `loongarch64-unknown-none` target。
+- [x] 验证 `make kernel-la` / `make run-la` 不再是缺目标，而是明确停在 LoongArch runtime 未实现。
+
+### 阶段 2B：真正产出 `kernel-la`
+
+- [ ] 根 `make all` 同时产出 `kernel-rv` 和真实 `kernel-la`。
 - [ ] 新增 LoongArch linker script，不复用 RISC-V `linker-qemu.ld`。
-- [ ] `user/Makefile` 支持 `loongarch64-unknown-none`。
-- [ ] user 侧 syscall wrapper 增加 LoongArch 汇编路径和寄存器约定。
+- [ ] `os/Makefile` 的 `ARCH=loongarch64 kernel` 从 fail-loudly 改为真实构建。
 - [ ] 将 LoongArch 所需 crate/toolchain 依赖纳入离线构建路径。
 
 ### 阶段 3：LoongArch 最小内核可启动

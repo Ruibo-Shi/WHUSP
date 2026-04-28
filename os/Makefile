@@ -13,8 +13,16 @@ OBJDUMP_ARCH := riscv64
 OBJCOPY_ARCH := riscv64
 GDB := riscv64-unknown-elf-gdb
 GDB_ARCH := riscv:rv64
+else ifeq ($(ARCH),loongarch64)
+TARGET := loongarch64-unknown-none
+QEMU := qemu-system-loongarch64
+OBJDUMP_ARCH := loongarch64
+OBJCOPY_ARCH := loongarch64
+GDB := loongarch64-linux-gnu-gdb
+GDB_ARCH := loongarch64
+LOONGARCH_UNSUPPORTED := 1
 else
-$(error Unsupported ARCH '$(ARCH)' in os/Makefile. Current kernel Makefile only supports ARCH=riscv64)
+$(error Unsupported ARCH '$(ARCH)' in os/Makefile. Supported values are riscv64 and loongarch64)
 endif
 
 ifeq ($(MODE),release)
@@ -53,6 +61,30 @@ else
 QEMU_CONSOLE_ARGS := -serial stdio
 endif
 
+ifeq ($(ARCH),loongarch64)
+QEMU_PRIMARY_DISK_ARGS = \
+	-drive file=$(PRIMARY_DISK),if=none,format=raw,id=x0 \
+	-device virtio-blk-pci,drive=x0,bus=virtio-mmio-bus.0
+
+ifneq ($(strip $(AUX_DISK)),)
+QEMU_AUX_DISK_ARGS = \
+	-drive file=$(AUX_DISK),if=none,format=raw,id=x1 \
+	-device virtio-blk-pci,drive=x1,bus=virtio-mmio-bus.1
+endif
+
+QEMU_COMMON_ARGS = \
+	-m $(MEM) \
+	$(QEMU_CONSOLE_ARGS) \
+	-smp $(SMP) \
+	-kernel $(KERNEL_ELF) \
+	$(QEMU_AUX_DISK_ARGS) \
+	-no-reboot \
+	-rtc base=$(RTC_BASE)
+
+QEMU_NET_ARGS = \
+	-device virtio-net-pci,netdev=net0 \
+	-netdev user,id=net0,hostfwd=tcp::5555-:5555,hostfwd=udp::5555-:5555
+else
 QEMU_PRIMARY_DISK_ARGS = \
 	-drive file=$(PRIMARY_DISK),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
@@ -77,6 +109,7 @@ QEMU_COMMON_ARGS = \
 QEMU_NET_ARGS = \
 	-device virtio-net-device,netdev=net \
 	-netdev user,id=net
+endif
 
 QEMU_ARGS = \
 	$(QEMU_PRIMARY_DISK_ARGS) \
@@ -96,6 +129,15 @@ env:
 	(rustup component list --installed | grep '^rust-src') >/dev/null 2>&1 || rustup component add rust-src
 	(rustup component list --installed | grep '^llvm-tools-preview') >/dev/null 2>&1 || rustup component add llvm-tools-preview
 
+ifeq ($(LOONGARCH_UNSUPPORTED),1)
+kernel: loongarch-unsupported
+
+loongarch-unsupported:
+	@echo "LoongArch kernel runtime is not implemented yet."
+	@echo "This target only reserves ARCH=loongarch64 build/run plumbing."
+	@echo "Next stage: implement arch/loongarch64 entry, console/shutdown, timer, trap, mm, and context."
+	@exit 1
+else
 kernel: env $(KERNEL_ELF)
 
 $(KERNEL_ELF): FORCE
@@ -103,12 +145,13 @@ $(KERNEL_ELF): FORCE
 	@cp src/linker-$(BOARD).ld src/linker.ld
 	@cargo build $(MODE_ARG)
 	@rm src/linker.ld
+endif
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 fs-img: $(APPS)
-	@cd $(USER_DIR) && make build TEST=$(TEST)
+	@cd $(USER_DIR) && make ARCH=$(ARCH) build TEST=$(TEST)
 	@rm -rf $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)
 	@for app in $(APPS); do \
@@ -184,4 +227,4 @@ disasm-vim: kernel
 
 FORCE:
 
-.PHONY: build env kernel clean disasm disasm-vim fs-img run run-inner debug gdbserver gdbclient fdt FORCE
+.PHONY: build env kernel loongarch-unsupported clean disasm disasm-vim fs-img run run-inner debug gdbserver gdbclient fdt FORCE
