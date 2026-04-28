@@ -390,10 +390,11 @@ fn exec_loaded_program(
     data: Vec<u8>,
 ) -> SysResult {
     if data.starts_with(ELF_MAGIC) {
-        let argc = args.len();
         current_process().exec(data.as_slice(), args, envs);
-        // return argc because cx.x[10] will be covered with it later
-        return Ok(argc as isize);
+        // CONTEXT: Linux execve starts a new image instead of returning to the
+        // old program. On RISC-V glibc, entry a0 is rtld_fini; argc/argv/envp
+        // are read from the initial user stack built by ProcessControlBlock::exec.
+        return Ok(0);
     }
 
     let Some(interpreter) = parse_shebang(data.as_slice())? else {

@@ -90,25 +90,20 @@ impl ProcessControlBlock {
         let trap_cx = task_inner.get_trap_cx();
         let user_sp = task_inner.res.as_ref().unwrap().ustack_top();
         let kstack_top = task.kstack.get_top();
-        let mut app_trap_cx = TrapContext::app_init_context(
-            entry_point,
-            user_sp,
-            KERNEL_SPACE.exclusive_access().token(),
-            kstack_top,
-            trap_handler as usize,
-        );
         let stack_info = ExecStackInfo {
             entry_point,
             phdr,
             phent,
             phnum,
         };
-        let (stack_top, argv_base, envp_base) =
-            init_user_stack(process_token, user_sp, &args, &envs, &stack_info);
-        app_trap_cx.set_sp(stack_top);
-        app_trap_cx.x[10] = args.len();
-        app_trap_cx.x[11] = argv_base;
-        app_trap_cx.x[12] = envp_base;
+        let (stack_top, _, _) = init_user_stack(process_token, user_sp, &args, &envs, &stack_info);
+        let app_trap_cx = TrapContext::app_init_context(
+            entry_point,
+            stack_top,
+            KERNEL_SPACE.exclusive_access().token(),
+            kstack_top,
+            trap_handler as usize,
+        );
         *trap_cx = app_trap_cx;
         drop(task_inner);
 

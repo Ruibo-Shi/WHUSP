@@ -167,7 +167,7 @@ impl ProcessControlBlock {
         task_inner.res.as_mut().unwrap().ustack_base = ustack_base;
         task_inner.res.as_mut().unwrap().alloc_user_res();
         task_inner.trap_cx_ppn = task_inner.res.as_mut().unwrap().trap_cx_ppn();
-        let (user_sp, argv_base, envp_base) = init_user_stack(
+        let (user_sp, _, _) = init_user_stack(
             new_token,
             task_inner.res.as_ref().unwrap().ustack_top(),
             &args,
@@ -175,16 +175,13 @@ impl ProcessControlBlock {
             &stack_info,
         );
 
-        let mut trap_cx = TrapContext::app_init_context(
+        let trap_cx = TrapContext::app_init_context(
             entry_point,
             user_sp,
             KERNEL_SPACE.exclusive_access().token(),
             task.kstack.get_top(),
             trap_handler as usize,
         );
-        trap_cx.x[10] = args.len();
-        trap_cx.x[11] = argv_base;
-        trap_cx.x[12] = envp_base;
         *task_inner.get_trap_cx() = trap_cx;
     }
 }

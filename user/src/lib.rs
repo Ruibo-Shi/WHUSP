@@ -15,6 +15,7 @@ extern crate alloc;
 #[macro_use]
 extern crate bitflags;
 
+use core::arch::global_asm;
 use core::ptr::addr_of_mut;
 
 use alloc::vec::Vec;
@@ -33,18 +34,32 @@ static mut HEAP_SPACE: [u8; USER_HEAP_SIZE] = [0; USER_HEAP_SIZE];
 #[global_allocator]
 static HEAP: LockedHeap = LockedHeap::empty();
 
+global_asm!(
+    r#"
+    .section .text.entry
+    .globl _start
+    .align 2
+_start:
+    mv a0, sp
+    call __user_start
+1:
+    j 1b
+"#
+);
+
 #[alloc_error_handler]
 pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
     panic!("Heap allocation error, layout = {:?}", layout);
 }
 
 #[unsafe(no_mangle)]
-#[unsafe(link_section = ".text.entry")]
-pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
+pub extern "C" fn __user_start(stack_top: usize) -> ! {
     unsafe {
         HEAP.lock()
             .init(addr_of_mut!(HEAP_SPACE) as usize, USER_HEAP_SIZE);
     }
+    let argc = unsafe { (stack_top as *const usize).read_volatile() };
+    let argv = stack_top + core::mem::size_of::<usize>();
     let mut v: Vec<&'static str> = Vec::new();
     for i in 0..argc {
         let str_start =
