@@ -26,8 +26,7 @@ run-rv: kernel-rv
 	@$(MAKE) --no-print-directory -C os ARCH=riscv64 MODE=$(MODE) run-inner PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(CONTEST_AUX_DISK)"
 
 run-la: kernel-la
-	@$(MAKE) --no-print-directory -C os ARCH=loongarch64 MODE=$(MODE) run-inner PRIMARY_DISK="$(TEST_DISK_LA)" AUX_DISK="$(CONTEST_AUX_DISK_LA)"
-
+	@$(MAKE) --no-print-directory -C os ARCH=loongarch64 MODE=$(MODE) run-inner PRIMARY_DISK="$(TEST_DISK_LA)"
 fmt:
 	@cd os && cargo fmt
 	@cd vendor/lwext4_rust && cargo fmt
