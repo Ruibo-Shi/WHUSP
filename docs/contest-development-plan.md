@@ -286,11 +286,11 @@
 
 ### 阶段 1：先做 RISC-V 行为不变的架构拆分
 
-- [ ] 新增 `os/src/arch/mod.rs`，用 `#[cfg(target_arch = ...)]` 选择 `riscv64` / `loongarch64`。
-- [ ] 新增 `os/src/arch/riscv64/`，迁入当前低层入口、trap、timer、SBI、board。
-- [ ] 让 generic kernel 只通过 `crate::arch` 调用低层入口。
-- [ ] 保持当前 RISC-V 启动契约不变。
-- [ ] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv-dev`、`make run-rv`。
+- [x] 新增 `os/src/arch.rs`，用 `#[cfg(target_arch = ...)]` 选择 `riscv64` / `loongarch64`。
+- [x] 新增 `os/src/arch/riscv64/`，迁入当前低层入口、trap、timer、SBI、board。
+- [x] 让 generic kernel 只通过 `crate::arch` 调用低层入口。
+- [x] 保持当前 RISC-V 启动契约不变。
+- [x] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv-dev`、`make run-rv`。
 
 ### 阶段 2：打通 LoongArch 构建与提交产物
 

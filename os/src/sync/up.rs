@@ -1,7 +1,7 @@
+use crate::arch::interrupt;
 use core::cell::{RefCell, RefMut, UnsafeCell};
 use core::ops::{Deref, DerefMut};
 use lazy_static::*;
-use riscv::register::sstatus;
 
 /*
 /// Wrap a static data structure inside it so that we are
@@ -69,10 +69,8 @@ impl IntrMaskingInfo {
     }
 
     pub fn enter(&mut self) {
-        let sie = sstatus::read().sie();
-        unsafe {
-            sstatus::clear_sie();
-        }
+        let sie = interrupt::supervisor_interrupt_enabled();
+        interrupt::disable_supervisor_interrupt();
         if self.nested_level == 0 {
             self.sie_before_masking = sie;
         }
@@ -82,9 +80,7 @@ impl IntrMaskingInfo {
     pub fn exit(&mut self) {
         self.nested_level -= 1;
         if self.nested_level == 0 && self.sie_before_masking {
-            unsafe {
-                sstatus::set_sie();
-            }
+            interrupt::enable_supervisor_interrupt();
         }
     }
 }
