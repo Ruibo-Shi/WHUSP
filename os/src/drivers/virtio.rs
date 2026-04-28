@@ -1,4 +1,6 @@
-use crate::mm::{FrameTracker, PhysAddr, PhysPageNum, frame_alloc_more};
+use crate::mm::{
+    FrameTracker, PageTable, PhysAddr, PhysPageNum, VirtAddr, frame_alloc_more, kernel_token,
+};
 use crate::sync::UPIntrFreeCell;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
@@ -35,7 +37,7 @@ unsafe impl Hal for VirtioHal {
             .min()
             .expect("virtio DMA allocation returned no frames");
         let pa: PhysAddr = ppn_base.into();
-        let ptr = NonNull::new(pa.0 as *mut u8).unwrap();
+        let ptr = NonNull::new(crate::arch::mm::phys_to_virt(pa.0) as *mut u8).unwrap();
         QUEUE_FRAMES.exclusive_access().append(&mut trackers);
         (pa.0 as VirtioPhysAddr, ptr)
     }
@@ -61,7 +63,7 @@ unsafe impl Hal for VirtioHal {
     }
 
     unsafe fn share(buffer: NonNull<[u8]>, _direction: BufferDirection) -> VirtioPhysAddr {
-        crate::arch::mm::virt_to_phys(buffer.as_ptr() as *mut u8 as usize) as VirtioPhysAddr
+        virt_to_phys(buffer.as_ptr() as *mut u8 as usize) as VirtioPhysAddr
     }
 
     unsafe fn unshare(_paddr: VirtioPhysAddr, _buffer: NonNull<[u8]>, _direction: BufferDirection) {
@@ -69,7 +71,10 @@ unsafe impl Hal for VirtioHal {
 }
 
 fn virt_to_phys(vaddr: usize) -> usize {
-    crate::arch::mm::virt_to_phys(vaddr)
+    PageTable::from_token(kernel_token())
+        .translate_va(VirtAddr::from(vaddr))
+        .unwrap()
+        .0
 }
 
 #[allow(unused)]
