@@ -30,19 +30,10 @@ MODE_ARG := --release
 endif
 
 # Paths
-USER_DIR := ../user
 TARGET_DIR := target/$(TARGET)/$(MODE)
 KERNEL_ELF := $(TARGET_DIR)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := $(TARGET_DIR)/asm
-FS_IMG := $(USER_DIR)/target/$(TARGET)/$(MODE)/fs.img
-ROOTFS_DIR := $(USER_DIR)/target/$(TARGET)/$(MODE)/rootfs
-APPS := $(USER_DIR)/src/bin/*
-
-# Ext4 image layout for local development
-FS_BLOCK_SIZE := 4096
-FS_SIZE_MIB := 128
-FS_BLOCK_COUNT := 32768
 
 # QEMU defaults
 MEM ?= 1G
@@ -50,7 +41,7 @@ SMP ?= 1
 BIOS ?= default
 RTC_BASE ?= utc
 GUI ?= off
-TEST_DISK ?=$(FS_IMG)
+TEST_DISK ?=../sdcard-rv.img
 AUX_DISK ?=
 PRIMARY_DISK ?=$(TEST_DISK)
 EXTRA_QEMU_ARGS ?=
@@ -121,7 +112,7 @@ OBJDUMP := rust-objdump --arch-name=$(OBJDUMP_ARCH)
 OBJCOPY := rust-objcopy --binary-architecture=$(OBJCOPY_ARCH)
 DISASM ?= -x
 
-build: env $(KERNEL_BIN) fs-img
+build: env $(KERNEL_BIN)
 
 env:
 	(rustup target list | grep "$(TARGET) (installed)") || rustup target add $(TARGET)
@@ -149,20 +140,6 @@ endif
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
-
-fs-img: $(APPS)
-	@cd $(USER_DIR) && make ARCH=$(ARCH) build TEST=$(TEST)
-	@rm -rf $(ROOTFS_DIR)
-	@mkdir -p $(ROOTFS_DIR)
-	@for app in $(APPS); do \
-		name=$$(basename $$app .rs); \
-		cp $(USER_DIR)/target/$(TARGET)/$(MODE)/$$name $(ROOTFS_DIR)/$$name; \
-	done
-	@rm -f $(FS_IMG)
-	@truncate -s $(FS_SIZE_MIB)M $(FS_IMG)
-	@mke2fs -q -t ext4 -b $(FS_BLOCK_SIZE) -O ^orphan_file,^metadata_csum_seed -d $(ROOTFS_DIR) -F $(FS_IMG) $(FS_BLOCK_COUNT)
-
-$(APPS):
 
 run: kernel
 	@$(MAKE) --no-print-directory run-inner PRIMARY_DISK="$(PRIMARY_DISK)" AUX_DISK="$(AUX_DISK)"
@@ -227,4 +204,4 @@ disasm-vim: kernel
 
 FORCE:
 
-.PHONY: build env kernel loongarch-unsupported clean disasm disasm-vim fs-img run run-inner debug gdbserver gdbclient fdt FORCE
+.PHONY: build env kernel loongarch-unsupported clean disasm disasm-vim run run-inner debug gdbserver gdbclient fdt FORCE

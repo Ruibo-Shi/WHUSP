@@ -8,19 +8,18 @@ RISCV_TARGET := riscv64gc-unknown-none-elf
 LOONGARCH_TARGET := loongarch64-unknown-none
 KERNEL_RV_SRC := os/target/$(RISCV_TARGET)/$(MODE)/os
 KERNEL_RV_STAMP := os/target/$(RISCV_TARGET)/$(MODE)/kernel-rv.stamp
-DISK_SRC := user/target/$(RISCV_TARGET)/$(MODE)/fs.img
-DISK_STAMP := user/target/$(RISCV_TARGET)/$(MODE)/fs-img.$(if $(strip $(TEST)),$(TEST),default).stamp
 KERNEL_INPUTS := Makefile os/Cargo.toml $(wildcard os/Cargo.lock) os/Makefile os/build.rs rust-toolchain.toml vendor/config.toml $(shell find os/src -type f ! -name linker.ld) $(shell find vendor/lwext4_rust -type f ! -path '*/target/*' ! -path '*/build_musl-generic/*')
-USER_INPUTS := user/Cargo.toml user/Makefile vendor/config.toml $(wildcard user/Cargo.lock) $(shell find user/src -type f)
 
-PRIMARY_DISK ?=$(CURDIR)/disk.img
 TEST_DISK ?=$(CURDIR)/sdcard-rv.img
 TEST_DISK_LA ?=$(CURDIR)/sdcard-la.img
-CONTEST_AUX_DISK ?=$(CURDIR)/disk.img
+CONTEST_AUX_DISK ?=
 CONTEST_AUX_DISK_LA ?=$(wildcard $(CURDIR)/disk-la.img)
-AUX_DISK ?=
+RUN_RV_AUX_ARG :=
+ifneq ($(strip $(CONTEST_AUX_DISK)),)
+RUN_RV_AUX_ARG := AUX_DISK="$(CONTEST_AUX_DISK)"
+endif
 
-all: kernel-rv disk.img
+all: kernel-rv
 
 $(KERNEL_RV_SRC) $(KERNEL_RV_STAMP) &: $(KERNEL_INPUTS)
 	@$(MAKE) --no-print-directory -C os ARCH=riscv64 MODE=$(MODE) kernel
@@ -32,21 +31,13 @@ kernel-rv: $(KERNEL_RV_SRC) $(KERNEL_RV_STAMP)
 kernel-la:
 	@$(MAKE) --no-print-directory -C os ARCH=loongarch64 MODE=$(MODE) kernel
 
-$(DISK_SRC) $(DISK_STAMP) &: $(USER_INPUTS) Makefile os/Makefile
-	@$(MAKE) --no-print-directory -C os ARCH=riscv64 MODE=$(MODE) TEST=$(TEST) fs-img
-	@touch $(DISK_STAMP)
-
-disk.img: $(DISK_SRC) $(DISK_STAMP)
-	@cp $(DISK_SRC) disk.img
-
-run-rv: all
+run-rv: kernel-rv
 	@if [ -z "$(TEST_DISK)" ]; then \
 		echo "TEST_DISK is required for contest-style boot. Example:"; \
 		echo "  make run-rv TEST_DISK=$(CURDIR)/sdcard-rv.img"; \
-		echo "For local development with generated disk.img on x0, use: make run-rv-dev"; \
 		exit 1; \
 	fi
-	@$(MAKE) --no-print-directory -C os ARCH=riscv64 MODE=$(MODE) TEST=$(TEST) run-inner PRIMARY_DISK="$(TEST_DISK)" AUX_DISK="$(CONTEST_AUX_DISK)"
+	@$(MAKE) --no-print-directory -C os ARCH=riscv64 MODE=$(MODE) TEST=$(TEST) run-inner PRIMARY_DISK="$(TEST_DISK)" $(RUN_RV_AUX_ARG)
 
 run-rv-contest: run-rv
 
@@ -60,12 +51,10 @@ run-la: kernel-la
 
 fmt:
 	@cd os && cargo fmt
-	@cd user && cargo fmt
 	@cd vendor/lwext4_rust && cargo fmt
 
 clean:
 	@$(MAKE) --no-print-directory -C os clean
-	@$(MAKE) --no-print-directory -C user clean
 	@rm -f kernel-rv kernel-la disk.img disk-la.img
 
-.PHONY: all kernel-rv kernel-la run-rv run-la run-rv-dev run-rv-contest fmt clean
+.PHONY: all kernel-rv kernel-la run-rv run-la run-rv-contest fmt clean

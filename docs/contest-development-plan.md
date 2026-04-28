@@ -4,10 +4,10 @@
 
 ## 快照
 
-- [x] 根目录 `make all` 已作为 RISC-V 主构建入口，当前产物是根目录 `kernel-rv` 和 `disk.img`。
+- [x] 根目录 `make all` 已作为 RISC-V 主构建入口，当前默认产物是根目录 `kernel-rv`。
 - [x] 当前仓库已 vendoring Cargo 依赖到 `vendor/crates`，并通过 `vendor/config.toml` 支持离线构建。
-- [x] 2026-04-28 本地执行 `CARGO_NET_OFFLINE=true make all`，结果为 `make: Nothing to be done for 'all'.`，说明当前产物在离线模式下是最新的。
-- [x] `make run-rv` 是比赛形态启动：`x0 = sdcard-rv.img`，可选 `x1 = disk.img`。
+- [x] 2026-04-28 移除默认 `user/` / `disk.img` 链路后，本地重新验证 `CARGO_NET_OFFLINE=true make all` 成功。
+- [x] `make run-rv` 是默认比赛形态启动：`x0 = sdcard-rv.img`，默认不再挂载 `x1`。
 - [x] 内核当前直接从评测盘加载 `/musl/busybox sh` 作为 initproc。
 - [x] 已有一次 RISC-V 全量手工运行记录：`develop-guide/contest-full-test-run-2026-04-27.md`。这次是主机注入命令，不是最终 submit runner。
 - [x] `basic-musl` 在该记录中能跑到 END marker，官方 `judge_basic.py` 结果是 `55 / 102`。
@@ -28,12 +28,12 @@
 
 - [x] 重写根目录 `Makefile`，让 `make all` 成为正式提交入口。
 - [x] 根目录 `make all` 产出 `kernel-rv`。
-- [x] 根目录 `make all` 产出 `disk.img`。
+- [x] 根目录 `make all` 不再依赖仓库内 `user/`、rootfs 镜像打包或 `disk.img`。
 - [x] 清理提交链路对隐藏目录 `.cargo` 的依赖，仓库根目录当前没有 `.cargo/`。
 - [x] 把远程 Cargo 依赖改成离线可构建方案：`vendor/crates` + `vendor/config.toml`。
-- [x] 本地验证离线构建入口仍可用：`CARGO_NET_OFFLINE=true make all`。
+- [x] 本地重新验证离线构建入口仍可用：`CARGO_NET_OFFLINE=true make all`。
 - [x] 接入比赛模式 initproc：内核直接加载 `/musl/busybox sh`。
-- [x] `make run-rv` 默认使用 `sdcard-rv.img` 作为评测盘，并保留 `CONTEST_AUX_DISK` 作为可选辅助盘。
+- [x] `make run-rv` 默认使用 `sdcard-rv.img` 作为评测盘；`CONTEST_AUX_DISK` 只在显式传入时挂载为可选辅助盘。
 
 ### 未完成
 
@@ -43,7 +43,7 @@
 - [ ] runner 输出精确的 `#### OS COMP TEST GROUP START xxxxx ####`。
 - [ ] runner 输出精确的 `#### OS COMP TEST GROUP END xxxxx ####`。
 - [ ] 所有测试组结束后主动关机，而不是依赖超时或主机杀 QEMU。
-- [ ] 在官方 contest Docker 中重新跑 `make all` 和 `make run-rv`。
+- [ ] 在官方 contest Docker 中重新跑 `make all` 和默认单盘 `make run-rv`。
 
 ### 顺序
 
@@ -164,7 +164,7 @@
 - [ ] 将可能等待 I/O 的 mount slot 从 `UPIntrFreeCell` 迁出。
 - [ ] 保持 `DYNAMIC_MOUNTS` 只做短临界区元数据操作，不进入块设备 I/O。
 - [ ] 改造 `with_mount()`：同一 mount 被其他任务使用时应等待，而不是 `borrow_mut()` panic。
-- [ ] 验证 BusyBox pipeline、`/musl/basic/pipe`、`/musl/basic/gettimeofday`、`make run-rv-dev`。
+- [ ] 验证 BusyBox pipeline、`/musl/basic/pipe`、`/musl/basic/gettimeofday`、默认单盘 `make run-rv`。
 
 ### 阶段 2：拆出最小 VFS 对象层
 
@@ -174,7 +174,7 @@
 - [ ] 定义 `VfsFile { node, offset, readable, writable, status_flags }`。
 - [ ] 保留现有 `File` trait 作为 fd table 对外接口。
 - [ ] 将 `open_file_at/stat_at/lookup_dir_at` 改成调用 VFS 层。
-- [ ] 每次迁移后跑 `make all`、`make run-rv-dev`、contest-style basic 文件系统抽测。
+- [ ] 每次迁移后跑 `make all`、默认单盘 `make run-rv`、contest-style basic 文件系统抽测。
 
 ### 阶段 3：正规化路径解析与 mount crossing
 
@@ -215,7 +215,6 @@
 - [ ] `make fmt`。
 - [ ] `make all`。
 - [ ] `CARGO_NET_OFFLINE=true make all`。
-- [ ] `make run-rv-dev`。
 - [ ] `make run-rv` 下执行 `/musl/basic_testcode.sh` 或等价 BusyBox shell 包装。
 - [ ] pipeline 复现不 panic，重复运行 5 次不死锁。
 - [ ] `basic-musl` 文件系统相关用例全部通过。
@@ -290,7 +289,7 @@
 - [x] 新增 `os/src/arch/riscv64/`，迁入当前低层入口、trap、timer、SBI、board。
 - [x] 让 generic kernel 只通过 `crate::arch` 调用低层入口。
 - [x] 保持当前 RISC-V 启动契约不变。
-- [x] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv-dev`、`make run-rv`。
+- [x] 验证 `make fmt`、`make all`、`CARGO_NET_OFFLINE=true make all`、`make run-rv`。
 
 ### 阶段 2A：LoongArch 构建入口骨架
 
@@ -344,7 +343,7 @@
 - [ ] `CARGO_NET_OFFLINE=true make all`。
 - [ ] `make run-rv` 不回退。
 - [ ] `make run-la` 或等价命令能启动 `sdcard-la.img`。
-- [ ] 官方 contest Docker 中验证 `kernel-rv`、`kernel-la`、`disk.img` 产物名正确。
+- [ ] 官方 contest Docker 中验证 `kernel-rv`、`kernel-la` 产物名正确。
 
 ## 基础设施与研究记录
 

@@ -44,11 +44,9 @@ jobs:
 
           rv_status=missing
           la_status=missing
-          disk_status=missing
 
           [[ -f kernel-rv ]] && rv_status=present
           [[ -f kernel-la ]] && la_status=present
-          [[ -f disk.img ]] && disk_status=present
 
           {
             echo "## Contest artifact gap"
@@ -57,7 +55,6 @@ jobs:
             echo "| --- | --- |"
             echo "| kernel-rv | ${rv_status} |"
             echo "| kernel-la | ${la_status} |"
-            echo "| disk.img | ${disk_status} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           [[ -f kernel-rv ]]
