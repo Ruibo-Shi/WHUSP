@@ -39,7 +39,7 @@ __alltraps:
     ld t1, 36*8(sp)
     # move to kernel_sp
     ld sp, 35*8(sp)
-    # switch to kernel space
+    # switch to kernel space (satp: Supervisor Address Translation and Protection)
     csrw satp, t0
     sfence.vma
     # jump to trap_handler

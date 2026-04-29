@@ -15,9 +15,45 @@ endif
 
 APP_DIR := src/bin
 TARGET_DIR := target/$(TARGET)/$(MODE)
-APPS := $(wildcard $(APP_DIR)/*.rs)
-ELFS := $(patsubst $(APP_DIR)/%.rs, $(TARGET_DIR)/%, $(APPS))
-BINS := $(patsubst $(APP_DIR)/%.rs, $(TARGET_DIR)/%.bin, $(APPS))
+APP_NAMES := \
+	brk_smoke \
+	cat \
+	cmdline_args \
+	count_lines \
+	exit \
+	fantastic_text \
+	filetest_simple \
+	forktest \
+	forktest2 \
+	forktest_simple \
+	forktree \
+	hello_world \
+	huge_write \
+	infloop \
+	initproc \
+	matrix \
+	pipe_large_test \
+	pipetest \
+	priv_csr \
+	priv_inst \
+	random_num \
+	run_pipe_test \
+	sleep \
+	sleep_simple \
+	stack_overflow \
+	stackful_coroutine \
+	stackless_coroutine \
+	store_fault \
+	tcp_simplehttp \
+	udp \
+	until_timeout \
+	user_shell \
+	usertests \
+	waitid_smoke \
+	yield
+APPS := $(addprefix $(APP_DIR)/,$(addsuffix .rs,$(APP_NAMES)))
+ELFS := $(addprefix $(TARGET_DIR)/,$(APP_NAMES))
+BINS := $(addsuffix .bin,$(ELFS))
 
 CP := cp 
 

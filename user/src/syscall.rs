@@ -30,7 +30,6 @@ const SYSCALL_WAIT4: usize = 260;
 const SYSCALL_NET_CONNECT: usize = 2000;
 const SYSCALL_NET_LISTEN: usize = 2001;
 const SYSCALL_NET_ACCEPT: usize = 2002;
-const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
 const SYSCALL_MUTEX_CREATE: usize = 1010;
@@ -350,10 +349,6 @@ pub fn sys_waitid(
             0,
         ],
     )
-}
-
-pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
-    syscall(SYSCALL_THREAD_CREATE, [entry, arg, 0, 0, 0, 0])
 }
 
 pub fn sys_gettid() -> isize {
