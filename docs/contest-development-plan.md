@@ -166,6 +166,21 @@
 - [ ] 改造 `with_mount()`：同一 mount 被其他任务使用时应等待，而不是 `borrow_mut()` panic。
 - [ ] 验证 BusyBox pipeline、`/musl/basic/pipe`、`/musl/basic/gettimeofday`、默认单盘 `make run-rv`。
 
+### 阶段 1.5：块 I/O 策略与文件对象锁边界
+
+- [x] 官方评测只要求 EXT4 测试盘、串行执行测试点、完整 marker 输出和结束后主动关机；不要求块设备 I/O 必须异步。
+- [x] 官方 QEMU 形态中 RV 使用 `virtio-blk-device`，LA 使用 `virtio-blk-pci`，因此设备后端和中断成熟度可以按架构分别验收。
+- [x] NighthawkOS / RocketOS 的 submit runner 都采用 `fork` / `execve` / `waitpid` 串行运行测试脚本，RocketOS 最后主动 `shutdown()`。
+- [x] RocketOS / RustOsWhu 的 RV 与 LA virtio block 路径均以同步 `read_blocks` / `write_blocks` 作为稳定基线。
+- [ ] 短期将 `DEV_NON_BLOCKING_ACCESS` 默认保持为 `false`，RV/LA 都先走同步块 I/O，确保 `busybox-musl` pipeline 不再卡在 START marker 后。
+- [ ] 保留架构差异说明：LA 在 virtio-pci 外部 IRQ 路径未验收前保持 polling/sync；RV 只有通过 BusyBox/basic 回归后才允许重新打开 nonblocking。
+- [ ] 梳理所有 `OSInode` / fd 文件对象持有 `UPIntrFreeCell` guard 后进入 `with_mount()` / EXT4 / block I/O 的路径。
+- [ ] 将文件 offset / status 更新拆成短临界区；实际 `read_at` / `write_at` / `stat` / `read_dirent64` I/O 不持有 `UPIntrFreeCell` guard 跨 `schedule()`。
+- [ ] 对共享 offset 的 `read` / `write` / `write_append` / `read_dirent64` 增加可睡眠文件对象锁或等价序列化方案。
+- [ ] 保持 `DYNAMIC_MOUNTS` 只覆盖短元数据临界区；长 I/O 状态继续放在可睡眠锁保护下。
+- [ ] 重新验证 `./busybox cat ./busybox_cmd.txt | while read line`、完整 `busybox_testcode.sh`、`/musl/basic/pipe`、`/musl/basic/gettimeofday`。
+- [ ] 只有 RV 通过上述回归后，才允许把 RV 的 nonblocking block I/O 重新打开；LA 等 virtio-pci IRQ / 外部中断路径单独通过验收后再考虑。
+
 ### 阶段 2：拆出最小 VFS 对象层
 
 - [ ] 新建 `os/src/fs/vfs/`，先只承载类型与转发逻辑，不改用户可见语义。
@@ -217,6 +232,8 @@
 - [ ] `CARGO_NET_OFFLINE=true make all`。
 - [ ] `make run-rv` 下执行 `/musl/basic_testcode.sh` 或等价 BusyBox shell 包装。
 - [ ] pipeline 复现不 panic，重复运行 5 次不死锁。
+- [ ] `busybox-musl` 完整脚本能打印 END marker；如果重新打开 RV nonblocking，同一回归必须继续通过。
+- [ ] LA 的 nonblocking block I/O 不作为当前门槛，等 virtio-pci IRQ / 外部中断路径单独验收。
 - [ ] `basic-musl` 文件系统相关用例全部通过。
 
 ## P2.6.5 - 可选 FAT/VFAT 支持路线图

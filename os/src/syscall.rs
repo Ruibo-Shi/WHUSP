@@ -44,7 +44,6 @@ const SYSCALL_WAIT4: usize = 260;
 const SYSCALL_NET_CONNECT: usize = 2000;
 const SYSCALL_NET_LISTEN: usize = 2001;
 const SYSCALL_NET_ACCEPT: usize = 2002;
-const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
 const SYSCALL_MUTEX_CREATE: usize = 1010;
@@ -172,7 +171,6 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_NET_CONNECT => Ok(sys_connect(args[0] as _, args[1] as _, args[2] as _)),
         SYSCALL_NET_LISTEN => Ok(sys_listen(args[0] as _)),
         SYSCALL_NET_ACCEPT => Ok(sys_accept(args[0] as _)),
-        SYSCALL_THREAD_CREATE => Ok(sys_thread_create(args[0], args[1])),
         SYSCALL_GETTID => Ok(sys_gettid()),
         SYSCALL_WAITTID => Ok(sys_waittid(args[0]) as isize),
         SYSCALL_MUTEX_CREATE => Ok(sys_mutex_create(args[0] == 1)),

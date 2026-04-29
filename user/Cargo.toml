@@ -23,66 +23,6 @@ doctest = false
 debug = true
 
 [[bin]]
-name = "adder"
-path = "src/bin/adder.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_atomic"
-path = "src/bin/adder_atomic.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_mutex_blocking"
-path = "src/bin/adder_mutex_blocking.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_mutex_spin"
-path = "src/bin/adder_mutex_spin.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_peterson_spin"
-path = "src/bin/adder_peterson_spin.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_peterson_yield"
-path = "src/bin/adder_peterson_yield.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_simple_spin"
-path = "src/bin/adder_simple_spin.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "adder_simple_yield"
-path = "src/bin/adder_simple_yield.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "barrier_condvar"
-path = "src/bin/barrier_condvar.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "barrier_fail"
-path = "src/bin/barrier_fail.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "cat"
 path = "src/bin/cat.rs"
 test = false
@@ -101,26 +41,8 @@ test = false
 bench = false
 
 [[bin]]
-name = "condsync_condvar"
-path = "src/bin/condsync_condvar.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "condsync_sem"
-path = "src/bin/condsync_sem.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "count_lines"
 path = "src/bin/count_lines.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "eisenberg"
-path = "src/bin/eisenberg.rs"
 test = false
 bench = false
 
@@ -179,12 +101,6 @@ test = false
 bench = false
 
 [[bin]]
-name = "huge_write_mt"
-path = "src/bin/huge_write_mt.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "infloop"
 path = "src/bin/infloop.rs"
 test = false
@@ -199,24 +115,6 @@ bench = false
 [[bin]]
 name = "matrix"
 path = "src/bin/matrix.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "mpsc_sem"
-path = "src/bin/mpsc_sem.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "peterson"
-path = "src/bin/peterson.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "phil_din_mutex"
-path = "src/bin/phil_din_mutex.rs"
 test = false
 bench = false
 
@@ -241,12 +139,6 @@ bench = false
 [[bin]]
 name = "priv_inst"
 path = "src/bin/priv_inst.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "race_adder_arg"
-path = "src/bin/race_adder_arg.rs"
 test = false
 bench = false
 
@@ -299,26 +191,8 @@ test = false
 bench = false
 
 [[bin]]
-name = "sync_sem"
-path = "src/bin/sync_sem.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "tcp_simplehttp"
 path = "src/bin/tcp_simplehttp.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "threads"
-path = "src/bin/threads.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "threads_arg"
-path = "src/bin/threads_arg.rs"
 test = false
 bench = false
 

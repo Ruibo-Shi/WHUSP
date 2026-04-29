@@ -140,9 +140,6 @@ pub fn sleep(sleep_ms: usize) {
     sys_sleep(sleep_ms);
 }
 
-pub fn thread_create(entry: usize, arg: usize) -> isize {
-    sys_thread_create(entry, arg)
-}
 pub fn gettid() -> isize {
     sys_gettid()
 }
