@@ -41,9 +41,6 @@ const SYSCALL_WAIT4: usize = 260;
 
 // Repo-private teaching/demo syscalls. They are intentionally outside the
 // Linux RISC-V syscall table and should not be treated as Linux ABI names.
-const SYSCALL_NET_CONNECT: usize = 2000;
-const SYSCALL_NET_LISTEN: usize = 2001;
-const SYSCALL_NET_ACCEPT: usize = 2002;
 const SYSCALL_MUTEX_CREATE: usize = 1010;
 const SYSCALL_MUTEX_LOCK: usize = 1011;
 const SYSCALL_MUTEX_UNLOCK: usize = 1012;
@@ -57,7 +54,6 @@ const SYSCALL_CONDVAR_WAIT: usize = 1032;
 mod errno;
 mod fs;
 mod memory;
-mod net;
 mod process;
 mod sync;
 mod wait;
@@ -65,7 +61,6 @@ mod wait;
 use errno::{SysError, ret};
 use fs::*;
 use memory::*;
-use net::*;
 use process::*;
 use sync::*;
 use wait::*;
@@ -164,9 +159,6 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as i32,
             args[3] as *mut RUsage,
         ),
-        SYSCALL_NET_CONNECT => Ok(sys_connect(args[0] as _, args[1] as _, args[2] as _)),
-        SYSCALL_NET_LISTEN => Ok(sys_listen(args[0] as _)),
-        SYSCALL_NET_ACCEPT => Ok(sys_accept(args[0] as _)),
         SYSCALL_MUTEX_CREATE => Ok(sys_mutex_create(args[0] == 1)),
         SYSCALL_MUTEX_LOCK => Ok(sys_mutex_lock(args[0])),
         SYSCALL_MUTEX_UNLOCK => Ok(sys_mutex_unlock(args[0])),
