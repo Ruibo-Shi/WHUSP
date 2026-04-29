@@ -7,6 +7,10 @@ _start:
     ori         $t0, $zero, 0x11
     lu52i.d     $t0, $t0, -1792
     csrwr       $t0, 0x181
+    # QEMU firmware enters the kernel at the low physical alias 0x90000000.
+    # Keep that alias fetchable only long enough to jump to the high DMW1 alias.
+    ori         $t0, $zero, 0x11
+    csrwr       $t0, 0x182
 
     li.w        $t0, 0xb0
     csrwr       $t0, 0x0
@@ -15,6 +19,13 @@ _start:
     li.w        $t0, 0x3
     csrwr       $t0, 0x2
 
+    la.global   $t0, high_entry
+    jirl        $zero, $t0, 0
+
+    .globl high_entry
+high_entry:
+    li.w        $t0, 0x0
+    csrwr       $t0, 0x182
     la.global   $sp, boot_stack_top
     csrrd       $a0, 0x20
     li.d        $a1, 0x9000000000100000

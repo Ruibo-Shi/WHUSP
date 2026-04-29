@@ -5,11 +5,9 @@ export CARGO_HOME
 
 ifeq ($(ARCH),riscv64)
 TARGET := riscv64gc-unknown-none-elf
-LINKER_SCRIPT := src/linker-qemu.ld
 DEFAULT_DISK := ../sdcard-rv.img
 else ifeq ($(ARCH),loongarch64)
 TARGET := loongarch64-unknown-none
-LINKER_SCRIPT := src/linker-loongarch64.ld
 DEFAULT_DISK := ../sdcard-la.img
 else
 $(error unsupported ARCH: $(ARCH))
@@ -25,9 +23,7 @@ AUX_DISK ?=
 COMMA := ,
 
 kernel:
-	@cp $(LINKER_SCRIPT) src/linker.ld
 	@cargo build $(MODE_ARG) --target $(TARGET)
-	@rm -f src/linker.ld
 
 run: kernel
 	@$(MAKE) --no-print-directory run-inner
@@ -48,7 +44,7 @@ ifeq ($(ARCH),riscv64)
 		-device virtio-net-device,netdev=net -netdev user,id=net \
 		-rtc base=utc
 else ifeq ($(ARCH),loongarch64)
-	@qemu-system-loongarch64 -machine virt -kernel $(KERNEL_ELF) -m $(MEM) -nographic -smp $(SMP) \
+	@qemu-system-loongarch64 -kernel $(KERNEL_ELF) -m $(MEM) -nographic -smp $(SMP) \
 		-drive file=$(PRIMARY_DISK),if=none,format=raw,id=x0 \
 		-device virtio-blk-pci,drive=x0 -no-reboot \
 		-device virtio-net-pci,netdev=net0 \
