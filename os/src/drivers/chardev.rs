@@ -3,7 +3,10 @@
 ///! Ref: ns16450 datasheet: https://datasheetspdf.com/pdf-file/1311818/NationalSemiconductor/NS16450/1
 use crate::board::CharDeviceImpl;
 use crate::sync::{Condvar, UPIntrFreeCell};
+#[cfg(not(target_arch = "loongarch64"))]
 use crate::task::schedule;
+#[cfg(target_arch = "loongarch64")]
+use crate::task::suspend_current_and_run_next;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use bitflags::*;
@@ -113,6 +116,14 @@ struct NS16550aInner {
     read_buffer: VecDeque<u8>,
 }
 
+impl NS16550aInner {
+    fn poll_rx(&mut self) {
+        while let Some(ch) = self.ns16550a.read() {
+            self.read_buffer.push_back(ch);
+        }
+    }
+}
+
 pub struct NS16550a {
     inner: UPIntrFreeCell<NS16550aInner>,
     condvar: Condvar,
@@ -142,21 +153,35 @@ impl CharDevice for NS16550a {
     fn read(&self) -> u8 {
         loop {
             let mut inner = self.inner.exclusive_access();
+            inner.poll_rx();
             if let Some(ch) = inner.read_buffer.pop_front() {
                 return ch;
             } else {
-                let task_cx_ptr = self.condvar.wait_no_sched();
-                drop(inner);
-                schedule(task_cx_ptr);
+                #[cfg(target_arch = "loongarch64")]
+                {
+                    // CONTEXT: LoongArch external UART IRQ routing is not wired yet, so
+                    // blocking on the condvar would sleep forever. Poll until IRQ arrives.
+                    drop(inner);
+                    suspend_current_and_run_next();
+                    continue;
+                }
+                #[cfg(not(target_arch = "loongarch64"))]
+                {
+                    let task_cx_ptr = self.condvar.wait_no_sched();
+                    drop(inner);
+                    schedule(task_cx_ptr);
+                }
             }
         }
     }
     fn try_read(&self) -> Option<u8> {
         let mut inner = self.inner.exclusive_access();
+        inner.poll_rx();
         inner.read_buffer.pop_front()
     }
     fn has_input(&self) -> bool {
-        let inner = self.inner.exclusive_access();
+        let mut inner = self.inner.exclusive_access();
+        inner.poll_rx();
         !inner.read_buffer.is_empty()
     }
     fn write(&self, ch: u8) {
