@@ -19,7 +19,6 @@ mod fs;
 mod lang_items;
 mod logging;
 mod mm;
-mod net;
 mod sync;
 mod syscall;
 mod task;
