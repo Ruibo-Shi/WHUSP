@@ -6,6 +6,7 @@ use super::{
 use crate::arch::mm as arch_mm;
 use crate::config::PAGE_SIZE;
 use crate::fs::File;
+use crate::mm::page_cache::{PageCacheId, PageCacheKey};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -38,10 +39,14 @@ pub(super) struct MmapInfo {
     pub(super) file_offset: usize,
     pub(super) file_size: usize,
     pub(super) backing_file: Option<Arc<dyn File + Send + Sync>>,
+    #[allow(dead_code)]
+    pub(super) page_cache_id: Option<PageCacheId>,
+    #[allow(dead_code)]
+    pub(super) page_cache_pages: BTreeMap<VirtPageNum, PageCacheKey>,
 }
 
 impl MmapInfo {
-    fn split_off(&mut self, offset: usize) -> Self {
+    fn split_off(&mut self, offset: usize, at: VirtPageNum) -> Self {
         let right = Self {
             shared: self.shared,
             writable: self.writable,
@@ -49,6 +54,8 @@ impl MmapInfo {
             file_offset: self.file_offset + offset,
             file_size: self.file_size,
             backing_file: self.backing_file.clone(),
+            page_cache_id: self.page_cache_id,
+            page_cache_pages: self.page_cache_pages.split_off(&at),
         };
         self.len = self.len.min(offset);
         right
@@ -93,7 +100,7 @@ impl MapArea {
         let right_mmap_info = self
             .mmap_info
             .as_mut()
-            .map(|info| info.split_off((at.0 - start.0) * PAGE_SIZE));
+            .map(|info| info.split_off((at.0 - start.0) * PAGE_SIZE, at));
         let right = Self {
             vpn_range: VPNRange::new(at, end),
             data_frames: self.data_frames.split_off(&at),

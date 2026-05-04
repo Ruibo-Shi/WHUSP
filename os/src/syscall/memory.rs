@@ -84,8 +84,8 @@ fn sys_mmap_impl(
     }
 
     let process = current_process();
-    let (backing_file, file_size) = if anonymous {
-        (None, 0)
+    let (backing_file, file_size, page_cache_id) = if anonymous {
+        (None, 0, None)
     } else {
         let fd = fd as isize;
         if fd < 0 {
@@ -105,7 +105,8 @@ fn sys_mmap_impl(
             return Err(SysError::EACCES);
         }
         let file_size = file.stat()?.size as usize;
-        (Some(file), file_size)
+        let page_cache_id = if shared { file.page_cache_id() } else { None };
+        (Some(file), file_size, page_cache_id)
     };
 
     let mut inner = process.inner_exclusive_access();
@@ -121,6 +122,7 @@ fn sys_mmap_impl(
                 offset,
                 shared,
                 writable,
+                page_cache_id,
             )
             .ok_or(SysError::ENOMEM)?;
         drop(inner);
@@ -141,6 +143,7 @@ fn sys_mmap_impl(
             offset,
             shared,
             writable,
+            page_cache_id,
         )
         .ok_or(SysError::ENOMEM)
 }

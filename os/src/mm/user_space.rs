@@ -7,6 +7,8 @@ use super::{VirtPageNum, frame_alloc};
 use crate::arch::mm as arch_mm;
 use crate::config::{PAGE_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT};
 use crate::fs::File;
+use crate::mm::page_cache::PageCacheId;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -148,6 +150,7 @@ impl MemorySet {
         file_offset: usize,
         shared: bool,
         writable: bool,
+        page_cache_id: Option<PageCacheId>,
     ) -> Option<usize> {
         let map_len = checked_page_align_up(len)?;
         let start = self.alloc_mmap_range(map_len)?;
@@ -160,6 +163,8 @@ impl MemorySet {
             file_offset,
             file_size,
             backing_file,
+            page_cache_id,
+            page_cache_pages: BTreeMap::new(),
         });
         self.areas.push(area);
         self.mmap_next = next_mmap_hint(end);
@@ -176,6 +181,7 @@ impl MemorySet {
         file_offset: usize,
         shared: bool,
         writable: bool,
+        page_cache_id: Option<PageCacheId>,
     ) -> Option<(usize, Vec<MmapFlush>)> {
         if start % PAGE_SIZE != 0 {
             return None;
@@ -210,6 +216,8 @@ impl MemorySet {
             file_offset,
             file_size,
             backing_file,
+            page_cache_id,
+            page_cache_pages: BTreeMap::new(),
         });
         self.areas.push(area);
         Some((start, flushes))

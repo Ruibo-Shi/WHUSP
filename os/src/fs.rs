@@ -149,7 +149,6 @@ pub trait File: Send + Sync {
     fn vfs_mount_id(&self) -> Option<mount::MountId> {
         None
     }
-    #[allow(dead_code)]
     fn page_cache_id(&self) -> Option<PageCacheId> {
         None
     }
