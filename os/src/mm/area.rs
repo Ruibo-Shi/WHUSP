@@ -126,9 +126,14 @@ impl MapArea {
                     return false;
                 }
             }
-            if let Some(info) = &self.mmap_info {
+            if let Some(info) = &mut self.mmap_info {
+                info.writable = permission.contains(MapPermission::W);
+                let mut page_cache_pte_flags = pte_flags;
+                if info.shared && info.writable {
+                    page_cache_pte_flags.remove(PTEFlags::W);
+                }
                 for vpn in info.page_cache_pages.keys().copied() {
-                    if !page_table.remap_flags(vpn, pte_flags) {
+                    if !page_table.remap_flags(vpn, page_cache_pte_flags) {
                         return false;
                     }
                 }
@@ -221,7 +226,10 @@ impl MapArea {
         if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
             return true;
         }
-        let pte_flags = PTEFlags::from_bits_truncate(self.map_perm.bits());
+        let mut pte_flags = PTEFlags::from_bits_truncate(self.map_perm.bits());
+        if info.shared && info.writable {
+            pte_flags.remove(PTEFlags::W);
+        }
         page_table.map(vpn, ppn, pte_flags);
         info.page_cache_pages.insert(vpn, key);
         true
@@ -320,7 +328,10 @@ impl MapArea {
                 continue;
             }
             let copy_len = (info.len - area_offset).min(PAGE_SIZE);
-            let Some(data) = PAGE_CACHE.exclusive_access().copy_page_data(*key, copy_len) else {
+            let Some(data) = PAGE_CACHE
+                .exclusive_access()
+                .copy_dirty_page_data(*key, copy_len)
+            else {
                 continue;
             };
             flushes.push(MmapFlush {

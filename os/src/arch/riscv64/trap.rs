@@ -151,7 +151,7 @@ pub fn trap_handler() -> ! {
 pub(super) fn handle_mmap_page_fault(addr: usize, access: MmapFaultAccess) -> bool {
     let process = current_process();
     let fault = {
-        let inner = process.inner_exclusive_access();
+        let mut inner = process.inner_exclusive_access();
         inner.memory_set.prepare_mmap_page_fault(addr, access)
     };
     let Some(fault) = fault else {

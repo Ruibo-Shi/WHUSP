@@ -123,6 +123,23 @@ impl PageCache {
         let len = len.min(PAGE_SIZE);
         Some(page.ppn().get_bytes_array()[..len].to_vec())
     }
+
+    pub(crate) fn mark_dirty(&mut self, key: PageCacheKey) -> bool {
+        let Some(page) = self.pages.get_mut(&key) else {
+            return false;
+        };
+        page.dirty = true;
+        true
+    }
+
+    pub(crate) fn copy_dirty_page_data(&self, key: PageCacheKey, len: usize) -> Option<Vec<u8>> {
+        let page = self.pages.get(&key)?;
+        if !page.dirty {
+            return None;
+        }
+        let len = len.min(PAGE_SIZE);
+        Some(page.ppn().get_bytes_array()[..len].to_vec())
+    }
 }
 
 lazy_static! {

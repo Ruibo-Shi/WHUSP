@@ -272,20 +272,42 @@ impl MemorySet {
     }
 
     pub fn prepare_mmap_page_fault(
-        &self,
+        &mut self,
         addr: usize,
         access: MmapFaultAccess,
     ) -> Option<MmapFaultResult> {
         let vpn = VirtAddr::from(addr).floor();
-        let area = self.areas.iter().find(|area| {
+        let area_idx = self.areas.iter().position(|area| {
             area.is_mmap() && area.vpn_range.get_start() <= vpn && vpn < area.vpn_range.get_end()
         })?;
+        let area = &self.areas[area_idx];
         if !access.is_allowed_by(area.map_perm) {
             return None;
         }
-        if area.data_frames.contains_key(&vpn)
-            || self.translate(vpn).is_some_and(|pte| pte.bits != 0)
-        {
+        if let Some(pte) = self.translate(vpn).filter(|pte| pte.bits != 0) {
+            if access == MmapFaultAccess::Write && !pte.writable() {
+                let key = area.mmap_info.as_ref().and_then(|info| {
+                    if info.shared && info.writable {
+                        info.page_cache_pages.get(&vpn).copied()
+                    } else {
+                        None
+                    }
+                })?;
+                if !PAGE_CACHE.exclusive_access().mark_dirty(key) {
+                    return None;
+                }
+                let pte_flags = crate::mm::page_table::PTEFlags::from_bits_truncate(
+                    self.areas[area_idx].map_perm.bits(),
+                );
+                if !self.page_table.remap_flags(vpn, pte_flags) {
+                    return None;
+                }
+                arch_mm::flush_tlb_all();
+            }
+            return Some(MmapFaultResult::Handled);
+        }
+        let area = &self.areas[area_idx];
+        if area.data_frames.contains_key(&vpn) {
             return Some(MmapFaultResult::Handled);
         }
 
