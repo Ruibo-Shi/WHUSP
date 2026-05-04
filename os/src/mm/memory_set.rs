@@ -1,5 +1,5 @@
 use super::{
-    MapArea, MapPermission, MapType, PageTable, PageTableEntry, VirtAddr, VirtPageNum,
+    MapArea, MapPermission, MapType, MmapFlush, PageTable, PageTableEntry, VirtAddr, VirtPageNum,
     page_table::PTEFlags,
 };
 use crate::arch::mm as arch_mm;
@@ -82,8 +82,17 @@ impl MemorySet {
     pub fn remap_existing_page_flags(&mut self, vpn: VirtPageNum, flags: PTEFlags) -> bool {
         self.page_table.remap_flags(vpn, flags)
     }
-    pub fn recycle_data_pages(&mut self) {
-        //*self = Self::new_bare();
+    pub fn recycle_data_pages(&mut self) -> Vec<MmapFlush> {
+        let mut flushes = Vec::new();
+        for area in &mut self.areas {
+            flushes.extend(area.collect_mmap_flushes(&self.page_table));
+            if area.is_mmap() {
+                area.unmap_resident(&mut self.page_table);
+            } else {
+                area.unmap(&mut self.page_table);
+            }
+        }
         self.areas.clear();
+        flushes
     }
 }

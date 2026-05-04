@@ -6,7 +6,7 @@ use super::{
 use crate::arch::mm as arch_mm;
 use crate::config::PAGE_SIZE;
 use crate::fs::File;
-use crate::mm::page_cache::{PageCacheId, PageCacheKey};
+use crate::mm::page_cache::{PAGE_CACHE, PageCacheId, PageCacheKey};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -234,14 +234,16 @@ impl MapArea {
             return;
         };
         let cache_vpns: Vec<_> = info.page_cache_pages.keys().copied().collect();
+        let cache_keys: Vec<_> = info.page_cache_pages.values().copied().collect();
         for vpn in cache_vpns {
             if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
                 page_table.unmap(vpn);
             }
         }
-        // UNFINISHED: Page-cache-backed mmap pages are removed from this
-        // address space here, but cache refcounts and dirty writeback are
-        // released by the following page-cache stage.
+        let mut cache = PAGE_CACHE.exclusive_access();
+        for key in cache_keys {
+            cache.dec_ref(key);
+        }
         info.page_cache_pages.clear();
     }
 
@@ -294,6 +296,21 @@ impl MapArea {
                 file: file.clone(),
                 offset: info.file_offset + area_offset,
                 data: src.to_vec(),
+            });
+        }
+        for (vpn, key) in &info.page_cache_pages {
+            let area_offset = (vpn.0 - start_vpn.0) * PAGE_SIZE;
+            if area_offset >= info.len {
+                continue;
+            }
+            let copy_len = (info.len - area_offset).min(PAGE_SIZE);
+            let Some(data) = PAGE_CACHE.exclusive_access().copy_page_data(*key, copy_len) else {
+                continue;
+            };
+            flushes.push(MmapFlush {
+                file: file.clone(),
+                offset: info.file_offset + area_offset,
+                data,
             });
         }
         flushes

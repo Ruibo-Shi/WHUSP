@@ -72,6 +72,10 @@ pub struct MmapPageCacheFault {
 }
 
 impl MmapPageCacheFault {
+    pub fn key(&self) -> PageCacheKey {
+        self.key
+    }
+
     pub fn resolve_ppn(&self) -> Option<PhysPageNum> {
         if let Some(ppn) = {
             let mut cache = PAGE_CACHE.exclusive_access();

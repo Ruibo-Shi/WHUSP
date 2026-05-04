@@ -269,7 +269,7 @@ fn exit_current(exit_code: i32, group_exit: bool) {
         remove_ready_tasks_of_process(pid);
         crate::syscall::remove_process_futex_waiters(pid);
         remove_from_pid2process(pid);
-        let (parent, children, fd_table) = {
+        let (parent, children, fd_table, flushes) = {
             let mut process_inner = process.inner_exclusive_access();
             // mark this process as a zombie process
             process_inner.is_zombie = true;
@@ -278,7 +278,7 @@ fn exit_current(exit_code: i32, group_exit: bool) {
             let parent = process_inner.parent.as_ref().and_then(|p| p.upgrade());
             let children = core::mem::take(&mut process_inner.children);
             // deallocate other data in user space i.e. program code/data section
-            process_inner.memory_set.recycle_data_pages();
+            let flushes = process_inner.memory_set.recycle_data_pages();
             // Take the fd table out while the current task is still installed.
             // Dropping VFS file objects can take SleepMutex-backed mount locks.
             let fd_table = core::mem::take(&mut process_inner.fd_table);
@@ -288,8 +288,12 @@ fn exit_current(exit_code: i32, group_exit: bool) {
             while process_inner.tasks.len() > 1 {
                 process_inner.tasks.pop();
             }
-            (parent, children, fd_table)
+            (parent, children, fd_table, flushes)
         };
+
+        for flush in flushes {
+            flush.write_back();
+        }
 
         // move all child processes under init process
         let mut initproc_inner = INITPROC.inner_exclusive_access();

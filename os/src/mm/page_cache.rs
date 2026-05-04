@@ -5,6 +5,7 @@ use crate::config::PAGE_SIZE;
 use crate::fs::MountId;
 use crate::sync::UPIntrFreeCell;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use lazy_static::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -109,6 +110,18 @@ impl PageCache {
         let ppn = page.ppn();
         self.pages.insert(key, page);
         ppn
+    }
+
+    pub(crate) fn dec_ref(&mut self, key: PageCacheKey) {
+        if let Some(page) = self.pages.get_mut(&key) {
+            page.ref_count = page.ref_count.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn copy_page_data(&self, key: PageCacheKey, len: usize) -> Option<Vec<u8>> {
+        let page = self.pages.get(&key)?;
+        let len = len.min(PAGE_SIZE);
+        Some(page.ppn().get_bytes_array()[..len].to_vec())
     }
 }
 

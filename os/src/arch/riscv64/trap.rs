@@ -176,10 +176,17 @@ pub(super) fn handle_mmap_page_fault(addr: usize, access: MmapFaultAccess) -> bo
             let Some(ppn) = page.resolve_ppn() else {
                 return false;
             };
+            let key = page.key();
             let mut inner = process.inner_exclusive_access();
-            inner
+            let installed = inner
                 .memory_set
-                .install_mmap_page_cache_fault_page(page, ppn)
+                .install_mmap_page_cache_fault_page(page, ppn);
+            if !installed {
+                crate::mm::page_cache::PAGE_CACHE
+                    .exclusive_access()
+                    .dec_ref(key);
+            }
+            installed
         }
     }
 }
