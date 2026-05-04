@@ -169,6 +169,18 @@ pub(super) fn handle_mmap_page_fault(addr: usize, access: MmapFaultAccess) -> bo
             let mut inner = process.inner_exclusive_access();
             inner.memory_set.install_mmap_fault_page(page, frame)
         }
+        MmapFaultResult::PageCache(page) => {
+            // UNFINISHED: Linux reports SIGBUS for some file-backed mmap faults,
+            // such as pages wholly beyond the backing object; this kernel still
+            // collapses mmap fault failures into SIGSEGV.
+            let Some(ppn) = page.resolve_ppn() else {
+                return false;
+            };
+            let mut inner = process.inner_exclusive_access();
+            inner
+                .memory_set
+                .install_mmap_page_cache_fault_page(page, ppn)
+        }
     }
 }
 

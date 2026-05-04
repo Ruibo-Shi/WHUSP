@@ -39,9 +39,7 @@ pub(super) struct MmapInfo {
     pub(super) file_offset: usize,
     pub(super) file_size: usize,
     pub(super) backing_file: Option<Arc<dyn File + Send + Sync>>,
-    #[allow(dead_code)]
     pub(super) page_cache_id: Option<PageCacheId>,
-    #[allow(dead_code)]
     pub(super) page_cache_pages: BTreeMap<VirtPageNum, PageCacheKey>,
 }
 
@@ -124,6 +122,13 @@ impl MapArea {
                     return false;
                 }
             }
+            if let Some(info) = &self.mmap_info {
+                for vpn in info.page_cache_pages.keys().copied() {
+                    if !page_table.remap_flags(vpn, pte_flags) {
+                        return false;
+                    }
+                }
+            }
         } else {
             for vpn in self.vpn_range {
                 if !page_table.remap_flags(vpn, pte_flags) {
@@ -190,12 +195,54 @@ impl MapArea {
         true
     }
 
+    pub(super) fn map_page_cache_frame(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+        ppn: PhysPageNum,
+        key: PageCacheKey,
+    ) -> bool {
+        let Some(info) = self.mmap_info.as_mut() else {
+            return false;
+        };
+        if info.page_cache_id != Some(key.id) {
+            return false;
+        }
+        if info.page_cache_pages.contains_key(&vpn) {
+            return true;
+        }
+        if self.data_frames.contains_key(&vpn) {
+            return true;
+        }
+        if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+            return true;
+        }
+        let pte_flags = PTEFlags::from_bits_truncate(self.map_perm.bits());
+        page_table.map(vpn, ppn, pte_flags);
+        info.page_cache_pages.insert(vpn, key);
+        true
+    }
+
     pub(super) fn unmap_resident(&mut self, page_table: &mut PageTable) {
         let vpns: Vec<_> = self.data_frames.keys().copied().collect();
         for vpn in vpns {
             page_table.unmap(vpn);
         }
         self.data_frames.clear();
+
+        let Some(info) = self.mmap_info.as_mut() else {
+            return;
+        };
+        let cache_vpns: Vec<_> = info.page_cache_pages.keys().copied().collect();
+        for vpn in cache_vpns {
+            if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+                page_table.unmap(vpn);
+            }
+        }
+        // UNFINISHED: Page-cache-backed mmap pages are removed from this
+        // address space here, but cache refcounts and dirty writeback are
+        // released by the following page-cache stage.
+        info.page_cache_pages.clear();
     }
 
     pub(super) fn copy_data(&mut self, page_table: &PageTable, data: &[u8], data_offset: usize) {

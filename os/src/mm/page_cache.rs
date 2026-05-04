@@ -88,16 +88,24 @@ impl PageCache {
         self.pages.contains_key(&key)
     }
 
-    pub(crate) fn insert_loaded_page(
+    pub(crate) fn get_and_inc_ref(&mut self, key: PageCacheKey) -> Option<PhysPageNum> {
+        let page = self.pages.get_mut(&key)?;
+        page.ref_count += 1;
+        Some(page.ppn())
+    }
+
+    pub(crate) fn insert_loaded_page_and_inc_ref(
         &mut self,
         key: PageCacheKey,
         frame: FrameTracker,
         file_size_at_load: usize,
     ) -> PhysPageNum {
-        if let Some(page) = self.pages.get(&key) {
+        if let Some(page) = self.pages.get_mut(&key) {
+            page.ref_count += 1;
             return page.ppn();
         }
-        let page = PageCachePage::new(frame, key, file_size_at_load);
+        let mut page = PageCachePage::new(frame, key, file_size_at_load);
+        page.ref_count = 1;
         let ppn = page.ppn();
         self.pages.insert(key, page);
         ppn

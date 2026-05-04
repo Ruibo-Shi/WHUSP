@@ -1,13 +1,14 @@
 use super::address::page_align_up;
 use super::area::MmapInfo;
 use super::{
-    FrameTracker, MapArea, MapPermission, MapType, MemorySet, MmapFlush, VPNRange, VirtAddr,
+    FrameTracker, MapArea, MapPermission, MapType, MemorySet, MmapFlush, PhysPageNum, VPNRange,
+    VirtAddr,
 };
 use super::{VirtPageNum, frame_alloc};
 use crate::arch::mm as arch_mm;
 use crate::config::{PAGE_SIZE, USER_MMAP_BASE, USER_MMAP_LIMIT};
 use crate::fs::File;
-use crate::mm::page_cache::PageCacheId;
+use crate::mm::page_cache::{PAGE_CACHE, PageCacheId, PageCacheKey};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -38,6 +39,7 @@ impl MmapFaultAccess {
 pub enum MmapFaultResult {
     Handled,
     Page(MmapFaultPage),
+    PageCache(MmapPageCacheFault),
 }
 
 pub struct MmapFaultPage {
@@ -57,6 +59,35 @@ impl MmapFaultPage {
             }
         }
         Some(frame)
+    }
+}
+
+pub struct MmapPageCacheFault {
+    vpn: VirtPageNum,
+    key: PageCacheKey,
+    file_offset: usize,
+    read_len: usize,
+    file_size_at_load: usize,
+    backing_file: Arc<dyn File + Send + Sync>,
+}
+
+impl MmapPageCacheFault {
+    pub fn resolve_ppn(&self) -> Option<PhysPageNum> {
+        if let Some(ppn) = {
+            let mut cache = PAGE_CACHE.exclusive_access();
+            cache.get_and_inc_ref(self.key)
+        } {
+            return Some(ppn);
+        }
+
+        let frame = frame_alloc()?;
+        if self.read_len > 0 {
+            let dst = &mut frame.ppn.get_bytes_array()[..self.read_len];
+            self.backing_file.read_at(self.file_offset, dst);
+        }
+
+        let mut cache = PAGE_CACHE.exclusive_access();
+        Some(cache.insert_loaded_page_and_inc_ref(self.key, frame, self.file_size_at_load))
     }
 }
 
@@ -243,23 +274,34 @@ impl MemorySet {
 
         let info = area.mmap_info.as_ref().unwrap();
         let area_offset = (vpn.0 - area.vpn_range.get_start().0) * PAGE_SIZE;
+        let file_offset = info.file_offset.checked_add(area_offset)?;
         // UNFINISHED: Linux raises SIGBUS for accesses to file-backed mmap
         // pages wholly beyond the backing object's end. The current contest
         // path zero-fills those bytes, but it must at least avoid asking EXT4
         // to read past EOF for the partial tail page used by dynamic DSOs.
         let map_read_len = info.len.saturating_sub(area_offset).min(PAGE_SIZE);
-        let file_read_len = info
-            .file_size
-            .saturating_sub(info.file_offset.saturating_add(area_offset))
-            .min(PAGE_SIZE);
+        let file_read_len = info.file_size.saturating_sub(file_offset).min(PAGE_SIZE);
         let read_len = if info.backing_file.is_some() {
             map_read_len.min(file_read_len)
         } else {
             0
         };
+        if let (Some(page_cache_id), Some(backing_file)) = (info.page_cache_id, &info.backing_file)
+        {
+            if let Some(key) = PageCacheKey::from_file_offset(page_cache_id, file_offset) {
+                return Some(MmapFaultResult::PageCache(MmapPageCacheFault {
+                    vpn,
+                    key,
+                    file_offset,
+                    read_len,
+                    file_size_at_load: info.file_size,
+                    backing_file: backing_file.clone(),
+                }));
+            }
+        }
         Some(MmapFaultResult::Page(MmapFaultPage {
             vpn,
-            file_offset: info.file_offset + area_offset,
+            file_offset,
             read_len,
             backing_file: info.backing_file.clone(),
         }))
@@ -276,6 +318,23 @@ impl MemorySet {
         let page_table = &mut self.page_table;
         let area = &mut self.areas[idx];
         area.map_existing_frame(page_table, page.vpn, frame)
+    }
+
+    pub fn install_mmap_page_cache_fault_page(
+        &mut self,
+        page: MmapPageCacheFault,
+        ppn: PhysPageNum,
+    ) -> bool {
+        let Some(idx) = self.areas.iter().position(|area| {
+            area.is_mmap()
+                && area.vpn_range.get_start() <= page.vpn
+                && page.vpn < area.vpn_range.get_end()
+        }) else {
+            return false;
+        };
+        let page_table = &mut self.page_table;
+        let area = &mut self.areas[idx];
+        area.map_page_cache_frame(page_table, page.vpn, ppn, page.key)
     }
 
     pub fn munmap_area(&mut self, start: usize, len: usize) -> Option<Vec<MmapFlush>> {
