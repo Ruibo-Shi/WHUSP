@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::*;
 use log::{info, warn};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct MountId(pub(crate) usize);
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -5,6 +5,7 @@ mod frame_allocator;
 mod heap_allocator;
 mod kernel_space;
 mod memory_set;
+pub(crate) mod page_cache;
 pub mod page_table;
 mod user_space;
 
