@@ -79,12 +79,16 @@ impl MapArea {
     }
 
     pub(super) fn from_another(another: &MapArea) -> Self {
+        let mut mmap_info = another.mmap_info.clone();
+        if let Some(info) = &mut mmap_info {
+            info.page_cache_pages.clear();
+        }
         Self {
             vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
             data_frames: BTreeMap::new(),
             map_type: another.map_type,
             map_perm: another.map_perm,
-            mmap_info: another.mmap_info.clone(),
+            mmap_info,
         }
     }
 
@@ -271,6 +275,18 @@ impl MapArea {
 
     pub(super) fn is_mmap(&self) -> bool {
         self.mmap_info.is_some()
+    }
+
+    pub(super) fn page_cache_mappings(&self) -> Vec<(VirtPageNum, PageCacheKey)> {
+        self.mmap_info
+            .as_ref()
+            .map(|info| {
+                info.page_cache_pages
+                    .iter()
+                    .map(|(vpn, key)| (*vpn, *key))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(super) fn collect_mmap_flushes(&self, page_table: &PageTable) -> Vec<MmapFlush> {

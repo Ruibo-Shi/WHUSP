@@ -107,9 +107,9 @@ impl MemorySet {
         for area in &user_space.areas {
             let new_area = MapArea::from_another(area);
             if area.is_mmap() {
-                // UNFINISHED: Linux keeps MAP_SHARED file mappings backed by
-                // shared page cache after fork; this kernel copies only resident
-                // pages and keeps lazy metadata for not-yet-faulted pages.
+                // UNFINISHED: MAP_SHARED mappings that cannot enter PAGE_CACHE
+                // still copy resident frames on fork; only page-cache-backed
+                // mappings share PPNs with refcounting.
                 memory_set.areas.push(new_area);
                 let area_idx = memory_set.areas.len() - 1;
                 let resident_vpns: Vec<_> = area.data_frames.keys().copied().collect();
@@ -123,6 +123,19 @@ impl MemorySet {
                     let page_table = &mut memory_set.page_table;
                     let dst_area = &mut memory_set.areas[area_idx];
                     dst_area.map_existing_frame(page_table, vpn, frame);
+                }
+                for (vpn, key) in area.page_cache_mappings() {
+                    let Some(ppn) = ({
+                        let mut cache = PAGE_CACHE.exclusive_access();
+                        cache.get_and_inc_ref(key)
+                    }) else {
+                        continue;
+                    };
+                    let page_table = &mut memory_set.page_table;
+                    let dst_area = &mut memory_set.areas[area_idx];
+                    if !dst_area.map_page_cache_frame(page_table, vpn, ppn, key) {
+                        PAGE_CACHE.exclusive_access().dec_ref(key);
+                    }
                 }
             } else {
                 memory_set.push(new_area, None);
