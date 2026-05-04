@@ -639,6 +639,10 @@ fn mount_metadata(mount_id: MountId) -> Option<(String, &'static str, &'static s
     Some((mounted.source.clone(), mounted.fs_type, mounted.options))
 }
 
+pub(super) fn mount_supports_page_cache(mount_id: MountId) -> bool {
+    mount_metadata(mount_id).is_some_and(|(_, fs_type, _)| matches!(fs_type, "ext4" | "vfat"))
+}
+
 fn resolve_mount_path(target: VfsNodeId, hint: &str) -> String {
     if !hint.is_empty() {
         return hint.into();

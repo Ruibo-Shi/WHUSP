@@ -1,12 +1,12 @@
 use super::super::devfs;
 use super::super::inode::OpenFlags;
-use super::super::mount::{release_inode_from_drop, with_mount};
+use super::super::mount::{mount_supports_page_cache, release_inode_from_drop, with_mount};
 use super::super::path::WorkingDir;
 use super::super::status_flags::StatusFlagsCell;
 use super::super::{File, FileStat, FileTimestamp, SeekWhence};
 use super::path::{self as vfs_path, LookupMode, VfsOpenTarget};
 use super::{FsError, FsNodeKind, FsResult, VfsNodeId, VfsPath};
-use crate::mm::UserBuffer;
+use crate::mm::{UserBuffer, page_cache::PageCacheId};
 use crate::sync::SleepMutex;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -337,6 +337,13 @@ impl File for VfsFile {
 
     fn vfs_mount_id(&self) -> Option<super::super::mount::MountId> {
         Some(self.node.mount_id)
+    }
+
+    fn page_cache_id(&self) -> Option<PageCacheId> {
+        if self.kind != FsNodeKind::RegularFile || !mount_supports_page_cache(self.node.mount_id) {
+            return None;
+        }
+        Some(PageCacheId::new(self.node.mount_id, self.node.ino))
     }
 
     fn status_flags(&self) -> OpenFlags {

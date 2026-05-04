@@ -12,7 +12,7 @@ mod stdio;
 mod tmpfs;
 mod vfs;
 
-use crate::mm::UserBuffer;
+use crate::mm::{UserBuffer, page_cache::PageCacheId};
 use bitflags::bitflags;
 
 const DEFAULT_BLOCK_SIZE: u32 = 4096;
@@ -147,6 +147,10 @@ pub trait File: Send + Sync {
         None
     }
     fn vfs_mount_id(&self) -> Option<mount::MountId> {
+        None
+    }
+    #[allow(dead_code)]
+    fn page_cache_id(&self) -> Option<PageCacheId> {
         None
     }
     fn status_flags(&self) -> inode::OpenFlags {
