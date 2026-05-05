@@ -10,6 +10,8 @@ const ROOT_INO: u32 = 2;
 struct TmpfsInode {
     kind: FsNodeKind,
     mode: u32,
+    uid: u32,
+    gid: u32,
     nlink: u32,
     open_count: usize,
     pending_delete: bool,
@@ -33,6 +35,8 @@ impl TmpfsInode {
         Self {
             kind,
             mode,
+            uid: 0,
+            gid: 0,
             nlink,
             open_count: 0,
             pending_delete: false,
@@ -377,6 +381,8 @@ impl FileSystemBackend for TmpFs {
         Ok(FileStat {
             mode: inode.mode,
             nlink: inode.nlink,
+            uid: inode.uid,
+            gid: inode.gid,
             size,
             blocks: size.div_ceil(512),
             blksize: super::DEFAULT_BLOCK_SIZE,
@@ -405,6 +411,25 @@ impl FileSystemBackend for TmpFs {
             inode.mtime = mtime;
         }
         inode.ctime = ctime;
+        Ok(())
+    }
+
+    fn set_mode(&mut self, ino: u32, mode: u32) -> FsResult {
+        let inode = self.inode_mut(ino)?;
+        inode.mode = (inode.mode & !0o7777) | (mode & 0o7777);
+        inode.ctime = FileTimestamp::now();
+        Ok(())
+    }
+
+    fn set_owner(&mut self, ino: u32, uid: Option<u32>, gid: Option<u32>) -> FsResult {
+        let inode = self.inode_mut(ino)?;
+        if let Some(uid) = uid {
+            inode.uid = uid;
+        }
+        if let Some(gid) = gid {
+            inode.gid = gid;
+        }
+        inode.ctime = FileTimestamp::now();
         Ok(())
     }
 

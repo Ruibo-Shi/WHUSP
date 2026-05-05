@@ -1,6 +1,6 @@
 use crate::fs::{
-    FileStat, MountId, WorkingDir, stat_at, stat_devfs_child, stat_devfs_misc_child,
-    stat_static_path, statfs_for_mount,
+    FileStat, MountId, WorkingDir, chmod_at, chown_at, stat_at, stat_devfs_child,
+    stat_devfs_misc_child, stat_static_path, statfs_for_mount,
 };
 use crate::task::{current_process, current_user_token};
 
@@ -9,9 +9,11 @@ use super::fd::get_file_by_fd;
 use super::path::dirfd_base;
 use super::uapi::{
     AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW, LinuxKstat, LinuxStatfs, LinuxStatx,
-    STATX_RESERVED, VALID_FSTATAT_FLAGS, VALID_STATX_FLAGS,
+    STATX_RESERVED, VALID_FCHOWNAT_FLAGS, VALID_FSTATAT_FLAGS, VALID_STATX_FLAGS,
 };
 use super::user_ptr::{PATH_MAX, read_user_c_string, write_user_value};
+
+const UID_GID_NO_CHANGE: u32 = u32::MAX;
 
 fn write_stat_result<T: From<FileStat> + Copy>(
     token: usize,
@@ -96,6 +98,121 @@ pub fn sys_newfstatat(
         statbuf,
         resolve_stat(dirfd, path.as_str(), follow_final_symlink)?,
     )
+}
+
+fn can_change_mode(stat: FileStat) -> bool {
+    let credentials = current_process().credentials();
+    // UNFINISHED: Linux chmod checks CAP_FOWNER and filesystem uid in the
+    // caller's user namespace. This kernel only has root-equivalent uid 0 plus
+    // stored fsuid.
+    credentials.euid == 0 || credentials.fsuid == stat.uid
+}
+
+fn ensure_can_change_owner(_stat: FileStat, uid: Option<u32>, gid: Option<u32>) -> SysResult<()> {
+    let credentials = current_process().credentials();
+    if credentials.euid == 0 {
+        return Ok(());
+    }
+    if uid.is_none() && gid.is_none() {
+        return Ok(());
+    }
+    // UNFINISHED: Linux permits a limited non-root chown group-change case
+    // when the file is owned by the caller and the new group is effective or
+    // supplementary. This first pass keeps non-root ownership mutation denied.
+    Err(SysError::EPERM)
+}
+
+pub fn sys_fchmodat(dirfd: isize, pathname: *const u8, mode: u32) -> SysResult {
+    if pathname.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let token = current_user_token();
+    let path = read_user_c_string(token, pathname, PATH_MAX)?;
+    if path.is_empty() {
+        return Err(SysError::ENOENT);
+    }
+    let stat = resolve_stat(dirfd, path.as_str(), true)?;
+    if !can_change_mode(stat) {
+        return Err(SysError::EPERM);
+    }
+    // UNFINISHED: Linux clears setuid/setgid bits in additional cases depending
+    // on ownership, group membership, and capabilities. The current credential
+    // model is still root-compatible and does not implement those transitions.
+    chmod_at(
+        dirfd_base_for_path(dirfd, path.as_str())?,
+        path.as_str(),
+        true,
+        mode,
+    )?;
+    Ok(0)
+}
+
+fn dirfd_base_for_path(dirfd: isize, path: &str) -> SysResult<WorkingDir> {
+    if path.starts_with('/') {
+        Ok(WorkingDir::root())
+    } else {
+        dirfd_base(dirfd)
+    }
+}
+
+fn decode_chown_id(raw: u32) -> Option<u32> {
+    (raw != UID_GID_NO_CHANGE).then_some(raw)
+}
+
+pub fn sys_fchownat(
+    dirfd: isize,
+    pathname: *const u8,
+    owner: u32,
+    group: u32,
+    flags: i32,
+) -> SysResult {
+    if pathname.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    if flags & !VALID_FCHOWNAT_FLAGS != 0 {
+        return Err(SysError::EINVAL);
+    }
+    let uid = decode_chown_id(owner);
+    let gid = decode_chown_id(group);
+    let token = current_user_token();
+    let path = read_user_c_string(token, pathname, PATH_MAX)?;
+    let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
+
+    if path.is_empty() {
+        if flags & AT_EMPTY_PATH == 0 {
+            return Err(SysError::ENOENT);
+        }
+        if dirfd == AT_FDCWD {
+            let stat = stat_at(current_process().working_dir(), ".", follow_final_symlink)?;
+            ensure_can_change_owner(stat, uid, gid)?;
+            chown_at(
+                current_process().working_dir(),
+                ".",
+                follow_final_symlink,
+                uid,
+                gid,
+            )?;
+            return Ok(0);
+        }
+        if dirfd < 0 {
+            return Err(SysError::EBADF);
+        }
+        let file = get_file_by_fd(dirfd as usize)?;
+        ensure_can_change_owner(file.stat()?, uid, gid)?;
+        file.set_owner(uid, gid)?;
+        return Ok(0);
+    }
+
+    let stat = resolve_stat(dirfd, path.as_str(), follow_final_symlink)?;
+    ensure_can_change_owner(stat, uid, gid)?;
+    chown_at(
+        dirfd_base_for_path(dirfd, path.as_str())?,
+        path.as_str(),
+        follow_final_symlink,
+        uid,
+        gid,
+    )?;
+    Ok(0)
 }
 
 pub fn sys_statfs(pathname: *const u8, statfsbuf: *mut LinuxStatfs) -> SysResult {

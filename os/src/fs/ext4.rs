@@ -257,6 +257,27 @@ impl FileSystemBackend for Ext4Mount {
             .map_err(map_ext4_error)
     }
 
+    fn set_mode(&mut self, ino: u32, mode: u32) -> FsResult {
+        let stat = self.stat(ino)?;
+        let mode = (stat.mode & !0o7777) | (mode & 0o7777);
+        self.fs.set_mode(ino, mode).map_err(map_ext4_error)
+    }
+
+    fn set_owner(&mut self, ino: u32, uid: Option<u32>, gid: Option<u32>) -> FsResult {
+        let stat = self.stat(ino)?;
+        let uid = uid.unwrap_or(stat.uid);
+        let gid = gid.unwrap_or(stat.gid);
+        if uid > u16::MAX as u32 || gid > u16::MAX as u32 {
+            // UNFINISHED: The current lwext4 wrapper exposes only the low
+            // 16-bit ext4 uid/gid fields, not the high uid/gid fields used for
+            // full 32-bit Linux ids.
+            return Err(FsError::InvalidInput);
+        }
+        self.fs
+            .set_owner(ino, uid as u16, gid as u16)
+            .map_err(map_ext4_error)
+    }
+
     fn retain_inode(&mut self, ino: u32) -> FsResult {
         let mut attr = lwext4_rust::FileAttr::default();
         self.fs.get_attr(ino, &mut attr).map_err(map_ext4_error)?;

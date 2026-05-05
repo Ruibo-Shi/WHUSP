@@ -133,6 +133,14 @@ impl<Hal: SystemHal, Dev: BlockDevice> Ext4Filesystem<Hal, Dev> {
     pub fn set_len(&mut self, ino: u32, len: u64) -> Ext4Result<()> {
         self.inode_ref(ino)?.set_len(len)
     }
+    pub fn set_mode(&mut self, ino: u32, mode: u32) -> Ext4Result<()> {
+        self.inode_ref(ino)?.set_mode(mode);
+        Ok(())
+    }
+    pub fn set_owner(&mut self, ino: u32, uid: u16, gid: u16) -> Ext4Result<()> {
+        self.inode_ref(ino)?.set_owner(uid, gid);
+        Ok(())
+    }
     pub fn set_times(
         &mut self,
         ino: u32,

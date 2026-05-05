@@ -193,6 +193,43 @@ pub(crate) fn stat_at(
     Ok(stat)
 }
 
+pub(crate) fn chmod_at(
+    cwd: WorkingDir,
+    name: &str,
+    follow_final_symlink: bool,
+    mode: u32,
+) -> FsResult {
+    let lookup_mode = if follow_final_symlink {
+        LookupMode::FollowFinal
+    } else {
+        LookupMode::NoFollowFinal
+    };
+    let path = vfs_path::resolve_existing(Some(cwd), name, lookup_mode)?;
+    with_mount(path.node.mount_id, |mount| {
+        mount.set_mode(path.node.ino, mode)
+    })
+    .ok_or(FsError::Io)?
+}
+
+pub(crate) fn chown_at(
+    cwd: WorkingDir,
+    name: &str,
+    follow_final_symlink: bool,
+    uid: Option<u32>,
+    gid: Option<u32>,
+) -> FsResult {
+    let lookup_mode = if follow_final_symlink {
+        LookupMode::FollowFinal
+    } else {
+        LookupMode::NoFollowFinal
+    };
+    let path = vfs_path::resolve_existing(Some(cwd), name, lookup_mode)?;
+    with_mount(path.node.mount_id, |mount| {
+        mount.set_owner(path.node.ino, uid, gid)
+    })
+    .ok_or(FsError::Io)?
+}
+
 pub(crate) fn lookup_dir_at(cwd: WorkingDir, name: &str) -> FsResult<WorkingDir> {
     vfs_path::resolve_existing(Some(cwd), name, LookupMode::FollowFinal)?
         .working_dir()
@@ -348,6 +385,13 @@ impl File for VfsFile {
     ) -> FsResult {
         with_mount(self.node.mount_id, |mount| {
             mount.set_times(self.node.ino, atime, mtime, ctime)
+        })
+        .ok_or(FsError::Io)?
+    }
+
+    fn set_owner(&self, uid: Option<u32>, gid: Option<u32>) -> FsResult {
+        with_mount(self.node.mount_id, |mount| {
+            mount.set_owner(self.node.ino, uid, gid)
         })
         .ok_or(FsError::Io)?
     }

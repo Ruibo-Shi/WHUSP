@@ -152,6 +152,9 @@ pub trait File: Send + Sync {
     ) -> FsResult {
         Err(FsError::Unsupported)
     }
+    fn set_owner(&self, _uid: Option<u32>, _gid: Option<u32>) -> FsResult {
+        Err(FsError::Unsupported)
+    }
     fn working_dir(&self) -> Option<WorkingDir> {
         None
     }
@@ -210,7 +213,9 @@ pub use pipe::make_pipe;
 pub(crate) use staticfs::{open_path as open_static_path, stat_path as stat_static_path};
 pub use stdio::{Stdin, Stdout};
 pub(crate) use vfs::open_file;
-pub(crate) use vfs::{FileSystemStat, FsError, FsResult, lookup_dir_at, open_file_at, stat_at};
+pub(crate) use vfs::{
+    FileSystemStat, FsError, FsResult, chmod_at, chown_at, lookup_dir_at, open_file_at, stat_at,
+};
 
 pub(self) fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
