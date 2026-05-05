@@ -7,6 +7,7 @@ mod kernel_space;
 mod memory_set;
 pub(crate) mod page_cache;
 pub mod page_table;
+pub(crate) mod shm;
 mod user_space;
 
 pub use address::VPNRange;

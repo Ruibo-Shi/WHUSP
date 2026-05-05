@@ -1,5 +1,5 @@
 use super::address::page_align_up;
-use super::area::MmapInfo;
+use super::area::{MmapInfo, ShmAreaInfo};
 use super::{
     FrameTracker, MapArea, MapPermission, MapType, MemorySet, MmapFlush, PhysPageNum, VPNRange,
     VirtAddr,
@@ -106,7 +106,28 @@ impl MemorySet {
         memory_set.map_trampoline();
         for area in &user_space.areas {
             let new_area = MapArea::from_another(area);
-            if area.is_mmap() {
+            if area.is_shm() {
+                let Some(shmid) = area.shm_segment_id() else {
+                    continue;
+                };
+                if !crate::mm::shm::retain_attached_segment(shmid, 0) {
+                    continue;
+                }
+                memory_set.areas.push(new_area);
+                let area_idx = memory_set.areas.len() - 1;
+                let shm_pages = crate::mm::shm::attached_segment_pages(shmid).unwrap_or_default();
+                for (vpn, page_index) in area.shm_page_mappings() {
+                    let Some(mapping) = shm_pages
+                        .iter()
+                        .find(|mapping| mapping.page_index == page_index)
+                    else {
+                        continue;
+                    };
+                    let page_table = &mut memory_set.page_table;
+                    let dst_area = &mut memory_set.areas[area_idx];
+                    dst_area.map_shm_frame(page_table, vpn, mapping.ppn, page_index);
+                }
+            } else if area.is_mmap() {
                 // UNFINISHED: MAP_SHARED mappings that cannot enter PAGE_CACHE
                 // still copy resident frames on fork; only page-cache-backed
                 // mappings share PPNs with refcounting.
@@ -269,6 +290,46 @@ impl MemorySet {
         });
         self.areas.push(area);
         Some((start, flushes))
+    }
+
+    pub fn attach_shm_area(
+        &mut self,
+        requested_addr: usize,
+        len: usize,
+        permission: MapPermission,
+        shmid: usize,
+        pages: &[crate::mm::shm::ShmPageMapping],
+    ) -> Option<usize> {
+        let map_len = checked_page_align_up(len)?;
+        let start = if requested_addr == 0 {
+            self.alloc_mmap_range(map_len)?
+        } else {
+            if requested_addr % PAGE_SIZE != 0 {
+                return None;
+            }
+            let end = requested_addr.checked_add(map_len)?;
+            if end > USER_MMAP_LIMIT || self.range_overlaps(requested_addr, end) {
+                return None;
+            }
+            requested_addr
+        };
+        let end = start.checked_add(map_len)?;
+        let start_vpn = VirtAddr::from(start).floor();
+        let mut area = MapArea::new(start.into(), end.into(), MapType::Framed, permission);
+        area.shm_info = Some(ShmAreaInfo::new(shmid, len));
+        for mapping in pages {
+            if mapping.page_index >= map_len / PAGE_SIZE {
+                continue;
+            }
+            let vpn = VirtPageNum(start_vpn.0 + mapping.page_index);
+            if !area.map_shm_frame(&mut self.page_table, vpn, mapping.ppn, mapping.page_index) {
+                area.unmap_resident(&mut self.page_table);
+                return None;
+            }
+        }
+        self.areas.push(area);
+        self.mmap_next = next_mmap_hint(end);
+        Some(start)
     }
 
     pub fn prepare_mmap_page_fault(

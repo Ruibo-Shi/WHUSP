@@ -50,7 +50,11 @@ impl MemorySet {
             .enumerate()
             .find(|(_, area)| area.vpn_range.get_start() == start_vpn)
         {
-            area.unmap(&mut self.page_table);
+            if area.is_mmap() || area.is_shm() {
+                area.unmap_resident(&mut self.page_table);
+            } else {
+                area.unmap(&mut self.page_table);
+            }
             self.areas.remove(idx);
         }
     }
@@ -86,7 +90,7 @@ impl MemorySet {
         let mut flushes = Vec::new();
         for area in &mut self.areas {
             flushes.extend(area.collect_mmap_flushes(&self.page_table));
-            if area.is_mmap() {
+            if area.is_mmap() || area.is_shm() {
                 area.unmap_resident(&mut self.page_table);
             } else {
                 area.unmap(&mut self.page_table);
@@ -94,5 +98,15 @@ impl MemorySet {
         }
         self.areas.clear();
         flushes
+    }
+}
+
+impl Drop for MemorySet {
+    fn drop(&mut self) {
+        for area in &mut self.areas {
+            if area.is_shm() {
+                area.unmap_resident(&mut self.page_table);
+            }
+        }
     }
 }

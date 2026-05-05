@@ -17,6 +17,7 @@ pub struct MapArea {
     pub(super) map_type: MapType,
     pub(super) map_perm: MapPermission,
     pub(super) mmap_info: Option<MmapInfo>,
+    pub(super) shm_info: Option<ShmAreaInfo>,
 }
 
 pub struct MmapFlush {
@@ -41,6 +42,36 @@ pub(super) struct MmapInfo {
     pub(super) backing_file: Option<Arc<dyn File + Send + Sync>>,
     pub(super) page_cache_id: Option<PageCacheId>,
     pub(super) page_cache_pages: BTreeMap<VirtPageNum, PageCacheKey>,
+}
+
+#[derive(Clone)]
+pub struct ShmAreaInfo {
+    pub(super) shmid: usize,
+    pub(super) len: usize,
+    pub(super) offset: usize,
+    pub(super) pages: BTreeMap<VirtPageNum, usize>,
+}
+
+impl ShmAreaInfo {
+    pub(crate) fn new(shmid: usize, len: usize) -> Self {
+        Self {
+            shmid,
+            len,
+            offset: 0,
+            pages: BTreeMap::new(),
+        }
+    }
+
+    fn split_off(&mut self, offset: usize, at: VirtPageNum) -> Self {
+        let right = Self {
+            shmid: self.shmid,
+            len: self.len.saturating_sub(offset),
+            offset: self.offset + offset,
+            pages: self.pages.split_off(&at),
+        };
+        self.len = self.len.min(offset);
+        right
+    }
 }
 
 impl MmapInfo {
@@ -75,6 +106,7 @@ impl MapArea {
             map_type,
             map_perm,
             mmap_info: None,
+            shm_info: None,
         }
     }
 
@@ -89,6 +121,10 @@ impl MapArea {
             map_type: another.map_type,
             map_perm: another.map_perm,
             mmap_info,
+            shm_info: another.shm_info.clone().map(|mut info| {
+                info.pages.clear();
+                info
+            }),
         }
     }
 
@@ -103,12 +139,20 @@ impl MapArea {
             .mmap_info
             .as_mut()
             .map(|info| info.split_off((at.0 - start.0) * PAGE_SIZE, at));
+        let right_shm_info = self.shm_info.as_mut().map(|info| {
+            // UNFINISHED: Linux reports SysV SHM attach counts per process
+            // attach. Splitting a SHM VMA is rare in the contest path; this
+            // representation counts each split VMA piece for lifetime safety.
+            crate::mm::shm::retain_attached_segment(info.shmid, 0);
+            info.split_off((at.0 - start.0) * PAGE_SIZE, at)
+        });
         let right = Self {
             vpn_range: VPNRange::new(at, end),
             data_frames: self.data_frames.split_off(&at),
             map_type: self.map_type,
             map_perm: self.map_perm,
             mmap_info: right_mmap_info,
+            shm_info: right_shm_info,
         };
         self.vpn_range = VPNRange::new(start, at);
         Some(right)
@@ -235,6 +279,31 @@ impl MapArea {
         true
     }
 
+    pub(super) fn map_shm_frame(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+        ppn: PhysPageNum,
+        page_index: usize,
+    ) -> bool {
+        let Some(info) = self.shm_info.as_mut() else {
+            return false;
+        };
+        if info.pages.contains_key(&vpn) {
+            return true;
+        }
+        if self.data_frames.contains_key(&vpn) {
+            return true;
+        }
+        if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+            return true;
+        }
+        let pte_flags = PTEFlags::from_bits_truncate(self.map_perm.bits());
+        page_table.map(vpn, ppn, pte_flags);
+        info.pages.insert(vpn, page_index);
+        true
+    }
+
     pub(super) fn unmap_resident(&mut self, page_table: &mut PageTable) {
         let vpns: Vec<_> = self.data_frames.keys().copied().collect();
         for vpn in vpns {
@@ -242,21 +311,31 @@ impl MapArea {
         }
         self.data_frames.clear();
 
-        let Some(info) = self.mmap_info.as_mut() else {
-            return;
-        };
-        let cache_vpns: Vec<_> = info.page_cache_pages.keys().copied().collect();
-        let cache_keys: Vec<_> = info.page_cache_pages.values().copied().collect();
-        for vpn in cache_vpns {
-            if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
-                page_table.unmap(vpn);
+        if let Some(info) = self.mmap_info.as_mut() {
+            let cache_vpns: Vec<_> = info.page_cache_pages.keys().copied().collect();
+            let cache_keys: Vec<_> = info.page_cache_pages.values().copied().collect();
+            for vpn in cache_vpns {
+                if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+                    page_table.unmap(vpn);
+                }
             }
+            let mut cache = PAGE_CACHE.exclusive_access();
+            for key in cache_keys {
+                cache.dec_ref(key);
+            }
+            info.page_cache_pages.clear();
         }
-        let mut cache = PAGE_CACHE.exclusive_access();
-        for key in cache_keys {
-            cache.dec_ref(key);
+
+        if let Some(info) = self.shm_info.as_mut() {
+            let shm_vpns: Vec<_> = info.pages.keys().copied().collect();
+            for vpn in shm_vpns {
+                if page_table.translate(vpn).is_some_and(|pte| pte.bits != 0) {
+                    page_table.unmap(vpn);
+                }
+            }
+            info.pages.clear();
+            let _ = crate::mm::shm::detach_segment(info.shmid, 0);
         }
-        info.page_cache_pages.clear();
     }
 
     pub(super) fn copy_data(&mut self, page_table: &PageTable, data: &[u8], data_offset: usize) {
@@ -283,6 +362,26 @@ impl MapArea {
 
     pub(super) fn is_mmap(&self) -> bool {
         self.mmap_info.is_some()
+    }
+
+    pub(super) fn is_shm(&self) -> bool {
+        self.shm_info.is_some()
+    }
+
+    pub(super) fn shm_segment_id(&self) -> Option<usize> {
+        self.shm_info.as_ref().map(|info| info.shmid)
+    }
+
+    pub(super) fn shm_page_mappings(&self) -> Vec<(VirtPageNum, usize)> {
+        self.shm_info
+            .as_ref()
+            .map(|info| {
+                info.pages
+                    .iter()
+                    .map(|(vpn, page_index)| (*vpn, *page_index))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(super) fn page_cache_mappings(&self) -> Vec<(VirtPageNum, PageCacheKey)> {
