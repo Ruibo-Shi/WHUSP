@@ -1,4 +1,4 @@
-use crate::fs::{OpenFlags, PollEvents, S_IFDIR, SeekWhence};
+use crate::fs::{OpenFlags, PollEvents, S_IFDIR, S_IFREG, SeekWhence};
 use crate::mm::{UserBuffer, translated_byte_buffer};
 use crate::task::{FdTableEntry, current_user_token};
 use alloc::vec::Vec;
@@ -68,6 +68,21 @@ pub fn sys_lseek(fd: usize, offset: i64, whence: usize) -> SysResult {
         return Err(SysError::EINVAL);
     }
     Ok(new_offset as isize)
+}
+
+pub fn sys_ftruncate(fd: usize, len: usize) -> SysResult {
+    if len > isize::MAX as usize {
+        return Err(SysError::EINVAL);
+    }
+    let file = get_file_by_fd(fd)?;
+    if !file.writable() {
+        return Err(SysError::EBADF);
+    }
+    if file.stat()?.mode & S_IFREG != S_IFREG {
+        return Err(SysError::EINVAL);
+    }
+    file.set_len(len)?;
+    Ok(0)
 }
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> SysResult {

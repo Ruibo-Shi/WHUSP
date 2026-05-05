@@ -267,6 +267,19 @@ impl File for VfsFile {
         .expect("filesystem mount is missing")
     }
 
+    fn set_len(&self, len: usize) -> FsResult {
+        if self.kind != FsNodeKind::RegularFile {
+            return Err(FsError::InvalidInput);
+        }
+        if !self.writable {
+            return Err(FsError::PermissionDenied);
+        }
+        with_mount(self.node.mount_id, |mount| {
+            mount.set_len(self.node.ino, len as u64)
+        })
+        .ok_or(FsError::Io)?
+    }
+
     fn seek(&self, offset: i64, whence: SeekWhence) -> FsResult<usize> {
         let mut current = self.offset.lock();
         let base = match whence {

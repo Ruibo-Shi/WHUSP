@@ -129,6 +129,9 @@ pub trait File: Send + Sync {
     fn write_at(&self, _offset: usize, _buf: &[u8]) -> usize {
         0
     }
+    fn set_len(&self, _len: usize) -> FsResult {
+        Err(FsError::Unsupported)
+    }
     fn seek(&self, _offset: i64, _whence: SeekWhence) -> FsResult<usize> {
         Err(FsError::IllegalSeek)
     }
