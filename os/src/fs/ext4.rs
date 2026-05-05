@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use core::str;
 use core::time::Duration;
 use lwext4_rust::ffi::{
-    EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY, ENOTSUP, EXT4_ROOT_INO,
+    EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOSPC, ENOTDIR, ENOTEMPTY, ENOTSUP, EXT4_ROOT_INO,
 };
 use lwext4_rust::{
     BlockDevice as Ext4BlockDevice, EXT4_DEV_BSIZE, Ext4Error, Ext4Filesystem, Ext4Result,
@@ -101,6 +101,7 @@ fn map_ext4_error(err: Ext4Error) -> FsError {
         ENOTEMPTY => FsError::NotEmpty,
         ENAMETOOLONG => FsError::NameTooLong,
         EIO => FsError::Io,
+        ENOSPC => FsError::NoSpace,
         ENOTSUP => FsError::Unsupported,
         _ => FsError::Io,
     }

@@ -117,6 +117,36 @@ pub fn sys_ftruncate(fd: usize, len: usize) -> SysResult {
     Ok(0)
 }
 
+pub fn sys_fallocate(fd: usize, mode: u32, offset: usize, len: usize) -> SysResult {
+    let offset = checked_position_offset(offset)?;
+    if len == 0 || len > isize::MAX as usize {
+        return Err(SysError::EINVAL);
+    }
+    let end = offset.checked_add(len).ok_or(SysError::EINVAL)?;
+    if end > isize::MAX as usize {
+        return Err(SysError::EINVAL);
+    }
+
+    let file = get_file_by_fd(fd)?;
+    if !file.writable() {
+        return Err(SysError::EBADF);
+    }
+    ensure_positioned_target(file.as_ref())?;
+
+    if mode != 0 {
+        // UNFINISHED: fallocate currently implements only the default mode.
+        // Linux range operations such as KEEP_SIZE, PUNCH_HOLE, COLLAPSE_RANGE,
+        // ZERO_RANGE, INSERT_RANGE, and UNSHARE_RANGE require filesystem range
+        // allocation/deallocation support that this VFS layer does not expose.
+        return Err(SysError::ENOTSUP);
+    }
+
+    if end as u64 > file.stat()?.size {
+        file.set_len(end)?;
+    }
+    Ok(0)
+}
+
 pub fn sys_fsync(fd: usize) -> SysResult {
     let file = get_file_by_fd(fd)?;
     let mode = file.stat()?.mode;

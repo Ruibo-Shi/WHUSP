@@ -12,6 +12,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+const VFS_WRITE_CHUNK_SIZE: usize = 64 * 1024;
+
 pub(crate) struct VfsFile {
     node: VfsNodeId,
     kind: FsNodeKind,
@@ -76,12 +78,30 @@ impl VfsFile {
         }
         let mut total_write_size = 0usize;
         for slice in buf.buffers.iter() {
+            let write_size = self.write_at_chunks(*offset, slice);
+            *offset = offset.checked_add(write_size).unwrap_or(usize::MAX);
+            total_write_size = total_write_size.saturating_add(write_size);
+            if write_size < slice.len() {
+                break;
+            }
+        }
+        total_write_size
+    }
+
+    fn write_at_chunks(&self, offset: usize, buf: &[u8]) -> usize {
+        let mut total_write_size = 0usize;
+        for chunk in buf.chunks(VFS_WRITE_CHUNK_SIZE) {
+            let Some(chunk_offset) = offset.checked_add(total_write_size) else {
+                break;
+            };
             let write_size = with_mount(self.node.mount_id, |mount| {
-                mount.write_at(self.node.ino, slice, *offset as u64)
+                mount.write_at(self.node.ino, chunk, chunk_offset as u64)
             })
             .expect("filesystem mount is missing");
-            *offset += write_size;
-            total_write_size += write_size;
+            total_write_size = total_write_size.saturating_add(write_size);
+            if write_size < chunk.len() {
+                break;
+            }
         }
         total_write_size
     }
@@ -298,10 +318,7 @@ impl File for VfsFile {
         if self.kind == FsNodeKind::Directory {
             return 0;
         }
-        with_mount(self.node.mount_id, |mount| {
-            mount.write_at(self.node.ino, buf, offset as u64)
-        })
-        .expect("filesystem mount is missing")
+        self.write_at_chunks(offset, buf)
     }
 
     fn set_len(&self, len: usize) -> FsResult {
