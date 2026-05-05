@@ -29,7 +29,7 @@ struct DynamicMount {
 struct MountedFs {
     source: String,
     fs_type: &'static str,
-    options: &'static str,
+    options: SleepMutex<&'static str>,
     backend: SleepMutex<Box<dyn FileSystemBackend>>,
 }
 
@@ -114,10 +114,14 @@ impl MountedFs {
         Arc::new(Self {
             source,
             fs_type,
-            options,
+            options: SleepMutex::new(options),
             backend: SleepMutex::new(backend),
         })
     }
+}
+
+fn mount_options(read_only: bool) -> &'static str {
+    if read_only { "ro" } else { "rw" }
 }
 
 fn block_source_name(device_index: usize) -> String {
@@ -445,18 +449,21 @@ fn mount_new_fs_at(
     })
 }
 
-pub(crate) fn register_pseudo_mount(
-    backend: Box<dyn FileSystemBackend>,
-    fs_type: &'static str,
-) -> MountId {
-    register_mount(MountedFs::new(backend, fs_type.into(), fs_type, "rw"))
-}
-
 pub(crate) fn mount_pseudo_fs_at(
     target: WorkingDir,
     backend: Box<dyn FileSystemBackend>,
     fs_type: &'static str,
     target_path: &str,
+) -> Result<MountId, MountError> {
+    mount_pseudo_fs_at_with_options(target, backend, fs_type, target_path, "rw")
+}
+
+pub(crate) fn mount_pseudo_fs_at_with_options(
+    target: WorkingDir,
+    backend: Box<dyn FileSystemBackend>,
+    fs_type: &'static str,
+    target_path: &str,
+    options: &'static str,
 ) -> Result<MountId, MountError> {
     let target = VfsNodeId::new(target.mount_id(), target.ino());
     if root_ino_for(target.mount_id).is_some_and(|root_ino| target.ino == root_ino) {
@@ -471,7 +478,7 @@ pub(crate) fn mount_pseudo_fs_at(
 
     let covered_parent = lookup_covered_parent(target)?;
     let target_path = resolve_mount_path(target, target_path);
-    let source_mount_id = register_pseudo_mount(backend, fs_type);
+    let source_mount_id = register_mount(MountedFs::new(backend, fs_type.into(), fs_type, options));
     DYNAMIC_MOUNTS.exclusive_session(|mounts| {
         if mounts.iter().any(|mount| mount.target == target) {
             return Err(MountError::TargetBusy);
@@ -486,8 +493,52 @@ pub(crate) fn mount_pseudo_fs_at(
     })
 }
 
-pub(crate) fn mount_tmpfs_at(target: WorkingDir, target_path: &str) -> Result<MountId, MountError> {
-    mount_pseudo_fs_at(target, Box::new(TmpFs::new()), "tmpfs", target_path)
+pub(crate) fn mount_tmpfs_at(
+    target: WorkingDir,
+    target_path: &str,
+    read_only: bool,
+) -> Result<MountId, MountError> {
+    mount_pseudo_fs_at_with_options(
+        target,
+        Box::new(TmpFs::new()),
+        "tmpfs",
+        target_path,
+        mount_options(read_only),
+    )
+}
+
+fn dynamic_mount_at(target: VfsNodeId) -> Option<MountId> {
+    DYNAMIC_MOUNTS.exclusive_session(|mounts| {
+        mounts
+            .iter()
+            .rev()
+            .find(|mount| mount.target == target)
+            .map(|mount| mount.source_mount_id)
+    })
+}
+
+fn set_mount_options(mount_id: MountId, options: &'static str) -> Result<(), MountError> {
+    let mounted = {
+        let mounts = MOUNTS.lock();
+        mounts
+            .get(mount_id.0)
+            .and_then(|mount| mount.as_ref().cloned())
+    }
+    .ok_or(MountError::TargetNotMounted)?;
+    *mounted.options.lock() = options;
+    Ok(())
+}
+
+pub(crate) fn remount_at(target: WorkingDir, read_only: bool) -> Result<(), MountError> {
+    let target = VfsNodeId::new(target.mount_id(), target.ino());
+    let mount_id = dynamic_mount_at(target)
+        .or_else(|| {
+            root_ino_for(target.mount_id)
+                .is_some_and(|root_ino| target.ino == root_ino)
+                .then_some(target.mount_id)
+        })
+        .ok_or(MountError::TargetNotMounted)?;
+    set_mount_options(mount_id, mount_options(read_only))
 }
 
 pub(crate) fn unmount_at(target: WorkingDir) -> Result<(), MountError> {
@@ -636,12 +687,17 @@ fn mount_metadata(mount_id: MountId) -> Option<(String, &'static str, &'static s
             .get(mount_id.0)
             .and_then(|mount| mount.as_ref().cloned())
     }?;
-    Some((mounted.source.clone(), mounted.fs_type, mounted.options))
+    let options = *mounted.options.lock();
+    Some((mounted.source.clone(), mounted.fs_type, options))
 }
 
 pub(super) fn mount_supports_page_cache(mount_id: MountId) -> bool {
     mount_metadata(mount_id)
         .is_some_and(|(_, fs_type, _)| matches!(fs_type, "ext4" | "vfat" | "tmpfs"))
+}
+
+pub(crate) fn mount_is_read_only(mount_id: MountId) -> bool {
+    mount_metadata(mount_id).is_some_and(|(_, _, options)| options == "ro")
 }
 
 fn resolve_mount_path(target: VfsNodeId, hint: &str) -> String {

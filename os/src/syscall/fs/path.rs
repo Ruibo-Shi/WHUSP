@@ -4,16 +4,17 @@ use super::stat::resolve_stat;
 use super::uapi::{
     AT_EACCESS, AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_OK, LinuxTimeSpec,
     RENAME_EXCHANGE, RENAME_NOREPLACE, RENAME_WHITEOUT, UTIME_NOW, UTIME_OMIT, VALID_ACCESS_MODE,
-    VALID_FACCESSAT_FLAGS, VALID_FACCESSAT2_FLAGS, VALID_RENAME_FLAGS, VALID_UTIMENSAT_FLAGS, X_OK,
+    VALID_FACCESSAT_FLAGS, VALID_FACCESSAT2_FLAGS, VALID_RENAME_FLAGS, VALID_UTIMENSAT_FLAGS, W_OK,
+    X_OK,
 };
 use super::user_ptr::read_user_value;
 use super::user_ptr::{
     PATH_MAX, UserBufferAccess, copy_to_user, read_user_c_string, translated_byte_buffer_checked,
 };
 use crate::fs::{
-    File, FileStat, FileTimestamp, OpenFlags, WorkingDir, link_file_at, lookup_dir_at, mkdir_at,
-    normalize_path, open_devfs_child, open_devfs_misc_child, open_file_at, open_static_path,
-    rename_at, rmdir_at, symlink_at, unlink_file_at,
+    File, FileStat, FileTimestamp, MountId, OpenFlags, WorkingDir, link_file_at, lookup_dir_at,
+    mkdir_at, mount_is_read_only, normalize_path, open_devfs_child, open_devfs_misc_child,
+    open_file_at, open_static_path, rename_at, rmdir_at, symlink_at, unlink_file_at,
 };
 use crate::mm::UserBuffer;
 use crate::task::{FdTableEntry, current_process, current_user_token};
@@ -46,10 +47,13 @@ fn check_access_mode(stat: &FileStat, mode: i32) -> SysResult<()> {
     }
 
     // UNFINISHED: Linux access checks depend on real/effective uid, gid,
-    // supplementary groups, path-prefix search permissions, read-only
-    // filesystems, immutable bits, and ETXTBSY. This kernel currently has no
-    // full credential/capability model, so R_OK/W_OK are root-like once the
-    // target resolves, while X_OK still requires any execute bit.
+    // supplementary groups, path-prefix search permissions, immutable bits, and
+    // ETXTBSY. This kernel currently has no full credential/capability model,
+    // so R_OK/W_OK are root-like once the target resolves, while X_OK still
+    // requires any execute bit.
+    if mode & W_OK != 0 && mount_is_read_only(MountId(stat.dev as usize)) {
+        return Err(SysError::EROFS);
+    }
     if mode & X_OK != 0 && stat.mode & 0o111 == 0 {
         return Err(SysError::EACCES);
     }
