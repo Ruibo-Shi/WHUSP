@@ -44,6 +44,28 @@ pub fn sys_shmget(key: isize, size: usize, shmflg: i32) -> SysResult {
         .map_err(shm_error_to_sys_error)
 }
 
+pub fn sys_shmat(shmid: usize, shmaddr: usize, shmflg: i32) -> SysResult {
+    let requested_addr = normalize_shmat_addr(shmaddr, shmflg)?;
+    let permission =
+        crate::mm::shm::shm_permission_from_flags(shmflg).map_err(shm_error_to_sys_error)?;
+    let process = current_process();
+    let pid = process.getpid();
+    let attach = crate::mm::shm::attach_segment(shmid, pid).map_err(shm_error_to_sys_error)?;
+    let mapped_addr = {
+        let mut inner = process.inner_exclusive_access();
+        inner
+            .memory_set
+            .attach_shm_area(requested_addr, attach.len, permission, shmid, &attach.pages)
+    };
+    match mapped_addr {
+        Some(addr) => Ok(addr as isize),
+        None => {
+            let _ = crate::mm::shm::detach_segment(shmid, pid);
+            Err(SysError::ENOMEM)
+        }
+    }
+}
+
 pub fn sys_mmap(
     addr: usize,
     len: usize,
@@ -214,6 +236,17 @@ fn prot_to_map_permission(prot: usize) -> MapPermission {
         permission |= MapPermission::X;
     }
     permission
+}
+
+fn normalize_shmat_addr(shmaddr: usize, shmflg: i32) -> Result<usize, SysError> {
+    if shmaddr == 0 || shmaddr % PAGE_SIZE == 0 {
+        return Ok(shmaddr);
+    }
+    // CONTEXT: SHMLBA is page-sized on the current contest targets.
+    if shmflg & crate::mm::shm::SHM_RND != 0 {
+        return Ok(shmaddr & !(PAGE_SIZE - 1));
+    }
+    Err(SysError::EINVAL)
 }
 
 fn shm_error_to_sys_error(error: ShmError) -> SysError {
