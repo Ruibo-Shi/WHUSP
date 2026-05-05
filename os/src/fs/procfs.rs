@@ -14,6 +14,9 @@ const ROOT_INO: u32 = 2;
 const MOUNTS_INO: u32 = 3;
 const MEMINFO_INO: u32 = 4;
 const UPTIME_INO: u32 = 5;
+const SYS_DIR_INO: u32 = 6;
+const SYS_KERNEL_DIR_INO: u32 = 7;
+const PID_MAX_INO: u32 = 8;
 const PID_DIR_BASE: u32 = 100;
 const PID_FILE_BASE: u32 = 10_000;
 const PID_FILE_STRIDE: u32 = 10;
@@ -29,6 +32,9 @@ enum ProcNode {
     Mounts,
     Meminfo,
     Uptime,
+    SysDir,
+    SysKernelDir,
+    PidMax,
     PidDir(usize),
     PidStat(usize),
     PidStatus(usize),
@@ -66,6 +72,9 @@ fn decode_node(ino: u32) -> Option<ProcNode> {
         MOUNTS_INO => Some(ProcNode::Mounts),
         MEMINFO_INO => Some(ProcNode::Meminfo),
         UPTIME_INO => Some(ProcNode::Uptime),
+        SYS_DIR_INO => Some(ProcNode::SysDir),
+        SYS_KERNEL_DIR_INO => Some(ProcNode::SysKernelDir),
+        PID_MAX_INO => Some(ProcNode::PidMax),
         ino if ino >= PID_FILE_BASE => {
             let rel = ino - PID_FILE_BASE;
             let pid = (rel / PID_FILE_STRIDE) as usize;
@@ -90,7 +99,9 @@ fn decode_node(ino: u32) -> Option<ProcNode> {
 
 fn node_kind(node: ProcNode) -> FsNodeKind {
     match node {
-        ProcNode::Root | ProcNode::PidDir(_) => FsNodeKind::Directory,
+        ProcNode::Root | ProcNode::SysDir | ProcNode::SysKernelDir | ProcNode::PidDir(_) => {
+            FsNodeKind::Directory
+        }
         _ => FsNodeKind::RegularFile,
     }
 }
@@ -122,6 +133,11 @@ fn root_entries() -> Vec<RawDirEntry> {
         name: "uptime".into(),
         dtype: DT_REG,
     });
+    entries.push(RawDirEntry {
+        ino: SYS_DIR_INO,
+        name: "sys".into(),
+        dtype: DT_DIR,
+    });
     for process in list_process_snapshots() {
         entries.push(RawDirEntry {
             ino: pid_dir_ino(process.pid),
@@ -129,6 +145,46 @@ fn root_entries() -> Vec<RawDirEntry> {
             dtype: DT_DIR,
         });
     }
+    entries
+}
+
+fn sys_entries() -> Vec<RawDirEntry> {
+    let mut entries = Vec::new();
+    entries.push(RawDirEntry {
+        ino: SYS_DIR_INO,
+        name: ".".into(),
+        dtype: DT_DIR,
+    });
+    entries.push(RawDirEntry {
+        ino: ROOT_INO,
+        name: "..".into(),
+        dtype: DT_DIR,
+    });
+    entries.push(RawDirEntry {
+        ino: SYS_KERNEL_DIR_INO,
+        name: "kernel".into(),
+        dtype: DT_DIR,
+    });
+    entries
+}
+
+fn sys_kernel_entries() -> Vec<RawDirEntry> {
+    let mut entries = Vec::new();
+    entries.push(RawDirEntry {
+        ino: SYS_KERNEL_DIR_INO,
+        name: ".".into(),
+        dtype: DT_DIR,
+    });
+    entries.push(RawDirEntry {
+        ino: SYS_DIR_INO,
+        name: "..".into(),
+        dtype: DT_DIR,
+    });
+    entries.push(RawDirEntry {
+        ino: PID_MAX_INO,
+        name: "pid_max".into(),
+        dtype: DT_REG,
+    });
     entries
 }
 
@@ -198,6 +254,14 @@ fn uptime_content() -> String {
     format!("{seconds}.{hundredths:02} 0.00\n")
 }
 
+fn pid_max_content() -> String {
+    // CONTEXT: LTP uses this procfs knob only to choose an unused PID for
+    // negative syscall tests. The allocator is much smaller than Linux's
+    // tunable PID space, but returning Linux's common upper bound keeps that
+    // chosen PID outside this kernel's live process table.
+    "4194304\n".into()
+}
+
 fn pid_stat_content(process: ProcessProcSnapshot) -> String {
     let times = process.cpu_times;
     let utime = us_to_clock_ticks(times.user_us);
@@ -265,6 +329,7 @@ fn node_content(node: ProcNode) -> FsResult<Vec<u8>> {
         ProcNode::Mounts => Ok(mounts_content().into_bytes()),
         ProcNode::Meminfo => Ok(meminfo_content().into_bytes()),
         ProcNode::Uptime => Ok(uptime_content().into_bytes()),
+        ProcNode::PidMax => Ok(pid_max_content().into_bytes()),
         ProcNode::PidStat(pid) => lookup_process(pid)
             .map(pid_stat_content)
             .map(String::into_bytes)
@@ -276,7 +341,9 @@ fn node_content(node: ProcNode) -> FsResult<Vec<u8>> {
         ProcNode::PidCmdline(pid) => lookup_process(pid)
             .map(pid_cmdline_content)
             .ok_or(FsError::NotFound),
-        ProcNode::Root | ProcNode::PidDir(_) => Err(FsError::IsDir),
+        ProcNode::Root | ProcNode::SysDir | ProcNode::SysKernelDir | ProcNode::PidDir(_) => {
+            Err(FsError::IsDir)
+        }
     }
 }
 
@@ -311,6 +378,7 @@ impl FileSystemBackend for ProcFs {
                 "mounts" => Ok((MOUNTS_INO, FsNodeKind::RegularFile)),
                 "meminfo" => Ok((MEMINFO_INO, FsNodeKind::RegularFile)),
                 "uptime" => Ok((UPTIME_INO, FsNodeKind::RegularFile)),
+                "sys" => Ok((SYS_DIR_INO, FsNodeKind::Directory)),
                 "self" => {
                     let pid = crate::task::current_process().getpid();
                     Ok((pid_dir_ino(pid), FsNodeKind::Directory))
@@ -321,6 +389,18 @@ impl FileSystemBackend for ProcFs {
                         .map(|_| (pid_dir_ino(pid), FsNodeKind::Directory))
                         .ok_or(FsError::NotFound)
                 }
+            },
+            ProcNode::SysDir => match component {
+                "." => Ok((SYS_DIR_INO, FsNodeKind::Directory)),
+                ".." => Ok((ROOT_INO, FsNodeKind::Directory)),
+                "kernel" => Ok((SYS_KERNEL_DIR_INO, FsNodeKind::Directory)),
+                _ => Err(FsError::NotFound),
+            },
+            ProcNode::SysKernelDir => match component {
+                "." => Ok((SYS_KERNEL_DIR_INO, FsNodeKind::Directory)),
+                ".." => Ok((SYS_DIR_INO, FsNodeKind::Directory)),
+                "pid_max" => Ok((PID_MAX_INO, FsNodeKind::RegularFile)),
+                _ => Err(FsError::NotFound),
             },
             ProcNode::PidDir(pid) => match component {
                 "." => Ok((pid_dir_ino(pid), FsNodeKind::Directory)),
@@ -387,7 +467,9 @@ impl FileSystemBackend for ProcFs {
     fn stat(&mut self, ino: u32) -> FsResult<FileStat> {
         let node = decode_node(ino).ok_or(FsError::NotFound)?;
         let mut stat = match node {
-            ProcNode::Root | ProcNode::PidDir(_) => FileStat::with_mode(S_IFDIR | 0o555),
+            ProcNode::Root | ProcNode::SysDir | ProcNode::SysKernelDir | ProcNode::PidDir(_) => {
+                FileStat::with_mode(S_IFDIR | 0o555)
+            }
             _ => FileStat::with_mode(S_IFREG | 0o444),
         };
         stat.dev = 0x70726f63;
@@ -425,6 +507,8 @@ impl FileSystemBackend for ProcFs {
     fn read_dirent64(&mut self, ino: u32, offset: u64, buf: &mut [u8]) -> FsResult<(usize, u64)> {
         match decode_node(ino).ok_or(FsError::NotFound)? {
             ProcNode::Root => write_dir_entries(&root_entries(), offset, buf),
+            ProcNode::SysDir => write_dir_entries(&sys_entries(), offset, buf),
+            ProcNode::SysKernelDir => write_dir_entries(&sys_kernel_entries(), offset, buf),
             ProcNode::PidDir(pid) => write_dir_entries(&pid_entries(pid), offset, buf),
             _ => Err(FsError::NotDir),
         }

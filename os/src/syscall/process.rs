@@ -31,6 +31,11 @@ const LINUX_REBOOT_CMD_CAD_ON: u32 = 0x89ab_cdef;
 const LINUX_REBOOT_CMD_CAD_OFF: u32 = 0x0000_0000;
 const LINUX_REBOOT_CMD_POWER_OFF: u32 = 0x4321_fedc;
 const NGROUPS_MAX: usize = 65536;
+const LINUX_CAPABILITY_VERSION_1: u32 = 0x1998_0330;
+const LINUX_CAPABILITY_VERSION_2: u32 = 0x2007_1026;
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+const LINUX_CAPABILITY_U32S_1: usize = 1;
+const LINUX_CAPABILITY_U32S_2: usize = 2;
 
 struct ScriptInterpreter {
     path: String,
@@ -69,6 +74,21 @@ pub struct LinuxTms {
     tms_stime: isize,
     tms_cutime: isize,
     tms_cstime: isize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxCapUserHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxCapUserData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
 }
 
 impl LinuxUtsName {
@@ -256,6 +276,139 @@ pub fn sys_getgid() -> isize {
 
 pub fn sys_getegid() -> isize {
     current_process().credentials().egid as isize
+}
+
+fn linux_capability_u32s(version: u32) -> Option<usize> {
+    match version {
+        LINUX_CAPABILITY_VERSION_1 => Some(LINUX_CAPABILITY_U32S_1),
+        LINUX_CAPABILITY_VERSION_2 | LINUX_CAPABILITY_VERSION_3 => Some(LINUX_CAPABILITY_U32S_2),
+        _ => None,
+    }
+}
+
+fn capability_target_process(pid: i32) -> Result<Arc<crate::task::ProcessControlBlock>, SysError> {
+    if pid < 0 {
+        return Err(SysError::EINVAL);
+    }
+    let current_task = current_task().ok_or(SysError::ESRCH)?;
+    let current = current_process();
+    let pid = pid as usize;
+    if pid == 0 || pid == current.getpid() || pid == current_task.linux_tid() {
+        return Ok(current);
+    }
+    pid2process(pid).ok_or(SysError::ESRCH)
+}
+
+pub fn sys_capget(hdrp: *mut LinuxCapUserHeader, datap: *mut LinuxCapUserData) -> SysResult {
+    if hdrp.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let token = current_user_token();
+    let mut header = read_user_value(token, hdrp.cast_const())?;
+    let Some(u32s) = linux_capability_u32s(header.version) else {
+        header.version = LINUX_CAPABILITY_VERSION_3;
+        write_user_value(token, hdrp, &header)?;
+        return Err(SysError::EINVAL);
+    };
+    let target = capability_target_process(header.pid)?;
+    if datap.is_null() {
+        return Ok(0);
+    }
+
+    // UNFINISHED: This is a compatibility capability model. It stores the raw
+    // effective/permitted/inheritable/bounding bitsets that LTP exercises, but
+    // does not implement Linux user namespaces, securebits, ambient caps, file
+    // capabilities, or capability recalculation across execve/setuid files.
+    let capabilities = target.credentials().capabilities;
+    for index in 0..u32s {
+        let data = LinuxCapUserData {
+            effective: capabilities.effective[index],
+            permitted: capabilities.permitted[index],
+            inheritable: capabilities.inheritable[index],
+        };
+        write_user_value(token, datap.wrapping_add(index), &data)?;
+    }
+    Ok(0)
+}
+
+fn capability_data_subset(
+    data: &[LinuxCapUserData; LINUX_CAPABILITY_U32S_2],
+    u32s: usize,
+    mut allowed: impl FnMut(usize) -> u32,
+    field: impl Fn(&LinuxCapUserData) -> u32,
+) -> bool {
+    (0..u32s).all(|index| field(&data[index]) & !allowed(index) == 0)
+}
+
+pub fn sys_capset(hdrp: *mut LinuxCapUserHeader, datap: *const LinuxCapUserData) -> SysResult {
+    if hdrp.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let token = current_user_token();
+    let mut header = read_user_value(token, hdrp.cast_const())?;
+    let Some(u32s) = linux_capability_u32s(header.version) else {
+        header.version = LINUX_CAPABILITY_VERSION_3;
+        write_user_value(token, hdrp, &header)?;
+        return Err(SysError::EINVAL);
+    };
+    let current_task = current_task().ok_or(SysError::ESRCH)?;
+    let current = current_process();
+    if header.pid < 0 {
+        return Err(SysError::EINVAL);
+    }
+    let target_pid = header.pid as usize;
+    if target_pid != 0 && target_pid != current.getpid() && target_pid != current_task.linux_tid() {
+        return Err(SysError::EPERM);
+    }
+    if datap.is_null() {
+        return Err(SysError::EFAULT);
+    }
+
+    let mut data = [LinuxCapUserData::default(); LINUX_CAPABILITY_U32S_2];
+    for (index, slot) in data.iter_mut().enumerate().take(u32s) {
+        *slot = read_user_value(token, datap.wrapping_add(index))?;
+    }
+    current.mutate_credentials(|credentials| {
+        let old = credentials.capabilities.clone();
+        if !capability_data_subset(
+            &data,
+            u32s,
+            |index| data[index].permitted,
+            |item| item.effective,
+        ) {
+            return Err(SysError::EPERM);
+        }
+        if !capability_data_subset(
+            &data,
+            u32s,
+            |index| old.permitted[index],
+            |item| item.permitted,
+        ) {
+            return Err(SysError::EPERM);
+        }
+        if !capability_data_subset(
+            &data,
+            u32s,
+            |index| old.bounding[index],
+            |item| item.inheritable,
+        ) {
+            return Err(SysError::EPERM);
+        }
+        if !capability_data_subset(
+            &data,
+            u32s,
+            |index| old.inheritable[index] | old.permitted[index],
+            |item| item.inheritable,
+        ) {
+            return Err(SysError::EPERM);
+        }
+        for (index, item) in data.iter().enumerate().take(u32s) {
+            credentials.capabilities.effective[index] = item.effective;
+            credentials.capabilities.permitted[index] = item.permitted;
+            credentials.capabilities.inheritable[index] = item.inheritable;
+        }
+        Ok(0)
+    })
 }
 
 pub fn sys_getgroups(size: usize, list: *mut u32) -> SysResult {

@@ -127,6 +127,39 @@ pub struct ProcessCpuTimesSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapabilitySets {
+    pub effective: [u32; 2],
+    pub permitted: [u32; 2],
+    pub inheritable: [u32; 2],
+    pub bounding: [u32; 2],
+}
+
+impl CapabilitySets {
+    const CAP_LAST_CAP: usize = 40;
+
+    fn all_known_bits() -> [u32; 2] {
+        let high_bits = Self::CAP_LAST_CAP + 1 - u32::BITS as usize;
+        [u32::MAX, (1u32 << high_bits) - 1]
+    }
+
+    pub fn root() -> Self {
+        let all = Self::all_known_bits();
+        Self {
+            effective: all,
+            permitted: all,
+            inheritable: [0; 2],
+            bounding: all,
+        }
+    }
+}
+
+impl Default for CapabilitySets {
+    fn default() -> Self {
+        Self::root()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Credentials {
     pub ruid: u32,
     pub euid: u32,
@@ -137,6 +170,7 @@ pub struct Credentials {
     pub sgid: u32,
     pub fsgid: u32,
     pub groups: Vec<u32>,
+    pub capabilities: CapabilitySets,
 }
 
 impl Credentials {
@@ -151,6 +185,7 @@ impl Credentials {
             sgid: 0,
             fsgid: 0,
             groups: Vec::new(),
+            capabilities: CapabilitySets::root(),
         }
     }
 

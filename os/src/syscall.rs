@@ -36,6 +36,8 @@ const SYSCALL_NEWFSTATAT: usize = 79;
 const SYSCALL_FSTAT: usize = 80;
 const SYSCALL_FSYNC: usize = 82;
 const SYSCALL_UTIMENSAT: usize = 88;
+const SYSCALL_CAPGET: usize = 90;
+const SYSCALL_CAPSET: usize = 91;
 const SYSCALL_EXIT: usize = 93;
 const SYSCALL_EXIT_GROUP: usize = 94;
 const SYSCALL_WAITID: usize = 95;
@@ -272,6 +274,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[1] as *const u8,
             args[2] as *const LinuxTimeSpec,
             args[3] as i32,
+        ),
+        SYSCALL_CAPGET => sys_capget(
+            args[0] as *mut LinuxCapUserHeader,
+            args[1] as *mut LinuxCapUserData,
+        ),
+        SYSCALL_CAPSET => sys_capset(
+            args[0] as *mut LinuxCapUserHeader,
+            args[1] as *const LinuxCapUserData,
         ),
         SYSCALL_STATX => sys_statx(
             args[0] as isize,
