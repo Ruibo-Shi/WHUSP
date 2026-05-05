@@ -117,6 +117,16 @@ pub fn sys_ftruncate(fd: usize, len: usize) -> SysResult {
     Ok(0)
 }
 
+pub fn sys_fsync(fd: usize) -> SysResult {
+    let file = get_file_by_fd(fd)?;
+    let mode = file.stat()?.mode;
+    if mode & S_IFREG != S_IFREG && mode & S_IFDIR != S_IFDIR {
+        return Err(SysError::EINVAL);
+    }
+    file.sync(false)?;
+    Ok(0)
+}
+
 pub fn sys_pread64(fd: usize, buf: *mut u8, len: usize, offset: usize) -> SysResult {
     let offset = checked_position_offset(offset)?;
     let token = current_user_token();

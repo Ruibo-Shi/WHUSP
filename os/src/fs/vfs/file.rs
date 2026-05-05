@@ -280,6 +280,13 @@ impl File for VfsFile {
         .ok_or(FsError::Io)?
     }
 
+    fn sync(&self, data_only: bool) -> FsResult {
+        with_mount(self.node.mount_id, |mount| {
+            mount.sync(self.node.ino, data_only)
+        })
+        .ok_or(FsError::Io)?
+    }
+
     fn seek(&self, offset: i64, whence: SeekWhence) -> FsResult<usize> {
         let mut current = self.offset.lock();
         let base = match whence {

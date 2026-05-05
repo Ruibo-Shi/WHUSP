@@ -236,6 +236,10 @@ impl FileSystemBackend for Ext4Mount {
         self.fs.set_len(ino, len).map_err(map_ext4_error)
     }
 
+    fn sync(&mut self, _ino: u32, _data_only: bool) -> FsResult {
+        self.fs.flush().map_err(map_ext4_error)
+    }
+
     fn set_times(
         &mut self,
         ino: u32,
