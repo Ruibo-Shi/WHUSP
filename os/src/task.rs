@@ -1,4 +1,5 @@
 mod clone;
+mod contest_runner;
 mod exec;
 mod fd;
 mod id;
