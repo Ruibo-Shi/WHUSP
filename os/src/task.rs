@@ -382,9 +382,14 @@ pub fn check_signals_of_current() -> Option<(i32, &'static str)> {
         return None;
     }
     let action = process.inner_exclusive_access().signal_actions[signum];
-    // CONTEXT: Linux's default disposition for SIGCHLD is ignore. Shells and
-    // runtest still reap children with wait/waitid or explicit sigtimedwait.
-    if action.is_ignore() || (signum == SIGCHLD as usize && !action.has_user_handler()) {
+    // CONTEXT: Linux's default disposition for SIGCHLD is ignore. PID 1 is
+    // also protected from ordinary default-disposition signals unless it has
+    // installed a user handler; LTP heartbeat children can otherwise kill the
+    // kernel-owned init shell with a stray SIGUSR1.
+    if action.is_ignore()
+        || (signum == SIGCHLD as usize && !action.has_user_handler())
+        || (Arc::ptr_eq(&process, &INITPROC) && !action.has_user_handler())
+    {
         let mut task_inner = task.inner_exclusive_access();
         task_inner.clear_pending(signum as u32);
         return None;

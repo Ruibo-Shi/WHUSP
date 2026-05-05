@@ -161,6 +161,7 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "pivot_root*",
     "pthserv",
     "ptrace*",
+    "remap_file_pages*",
     "route*",
     "run_sched_cliserv.sh",
     "sctp*",
