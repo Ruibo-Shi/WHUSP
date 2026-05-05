@@ -250,8 +250,8 @@ fn do_faccessat(
     Ok(0)
 }
 
-pub fn sys_faccessat(dirfd: isize, path: *const u8, mode: i32, flags: i32) -> SysResult {
-    do_faccessat(dirfd, path, mode, flags, VALID_FACCESSAT_FLAGS)
+pub fn sys_faccessat(dirfd: isize, path: *const u8, mode: i32) -> SysResult {
+    do_faccessat(dirfd, path, mode, 0, VALID_FACCESSAT_FLAGS)
 }
 
 pub fn sys_faccessat2(dirfd: isize, path: *const u8, mode: i32, flags: i32) -> SysResult {
