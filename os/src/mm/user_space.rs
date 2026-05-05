@@ -503,21 +503,31 @@ impl MemorySet {
         if len == 0 || start % PAGE_SIZE != 0 {
             return None;
         }
-        let Some(end) = start.checked_add(page_align_up(len)) else {
+        let Some(map_len) = checked_page_align_up(len) else {
+            return None;
+        };
+        let Some(end) = start.checked_add(map_len) else {
             return None;
         };
         let start_vpn = VirtAddr::from(start).floor();
         let end_vpn = VirtAddr::from(end).floor();
-        let Some(idx) = self.areas.iter().position(|area| {
-            area.is_mmap()
-                && area.vpn_range.get_start() == start_vpn
-                && area.vpn_range.get_end() == end_vpn
-        }) else {
-            return None;
-        };
-        let mut area = self.areas.remove(idx);
-        let flushes = area.collect_mmap_flushes(&self.page_table);
-        area.unmap_resident(&mut self.page_table);
+
+        self.split_area_at(start_vpn);
+        self.split_area_at(end_vpn);
+
+        let mut flushes = Vec::new();
+        let mut idx = 0;
+        while idx < self.areas.len() {
+            let area_start = self.areas[idx].vpn_range.get_start();
+            let area_end = self.areas[idx].vpn_range.get_end();
+            if self.areas[idx].is_mmap() && area_start >= start_vpn && area_end <= end_vpn {
+                let mut area = self.areas.remove(idx);
+                flushes.extend(area.collect_mmap_flushes(&self.page_table));
+                area.unmap_resident(&mut self.page_table);
+            } else {
+                idx += 1;
+            }
+        }
         Some(flushes)
     }
 

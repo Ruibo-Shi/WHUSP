@@ -5,7 +5,11 @@ use alloc::sync::Arc;
 use core::any::Any;
 
 const ETC_NSSWITCH_CONF: &[u8] =
-    b"hosts: files\nprotocols: files\nservices: files\nnetworks: files\n";
+    b"passwd: files\ngroup: files\nhosts: files\nprotocols: files\nservices: files\nnetworks: files\n";
+const ETC_PASSWD: &[u8] =
+    b"root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n";
+const ETC_GROUP: &[u8] =
+    b"root:x:0:\ndaemon:x:1:\nusers:x:100:\nnobody:x:65534:\nnogroup:x:65534:\n";
 const ETC_HOSTS: &[u8] = b"127.0.0.1 localhost localhost.localdomain\n";
 const ETC_RESOLV_CONF: &[u8] = b"";
 const ETC_PROTOCOLS: &[u8] = b"ip 0 IP\ntcp 6 TCP\nudp 17 UDP\n";
@@ -14,6 +18,8 @@ const ETC_PROTOCOLS: &[u8] = b"ip 0 IP\ntcp 6 TCP\nudp 17 UDP\n";
 enum StaticNode {
     EtcDir,
     NsswitchConf,
+    Passwd,
+    Group,
     Hosts,
     ResolvConf,
     Protocols,
@@ -39,6 +45,8 @@ fn lookup_absolute(path: &str) -> Option<StaticNode> {
     match path {
         "/etc" | "/etc/" => Some(StaticNode::EtcDir),
         "/etc/nsswitch.conf" => Some(StaticNode::NsswitchConf),
+        "/etc/passwd" => Some(StaticNode::Passwd),
+        "/etc/group" => Some(StaticNode::Group),
         "/etc/hosts" => Some(StaticNode::Hosts),
         "/etc/resolv.conf" => Some(StaticNode::ResolvConf),
         "/etc/protocols" => Some(StaticNode::Protocols),
@@ -49,6 +57,8 @@ fn lookup_absolute(path: &str) -> Option<StaticNode> {
 fn content(node: StaticNode) -> Option<&'static [u8]> {
     match node {
         StaticNode::NsswitchConf => Some(ETC_NSSWITCH_CONF),
+        StaticNode::Passwd => Some(ETC_PASSWD),
+        StaticNode::Group => Some(ETC_GROUP),
         StaticNode::Hosts => Some(ETC_HOSTS),
         StaticNode::ResolvConf => Some(ETC_RESOLV_CONF),
         StaticNode::Protocols => Some(ETC_PROTOCOLS),
@@ -65,9 +75,11 @@ fn stat_node(node: StaticNode) -> FileStat {
     stat.ino = match node {
         StaticNode::EtcDir => 1,
         StaticNode::NsswitchConf => 2,
-        StaticNode::Hosts => 3,
-        StaticNode::ResolvConf => 4,
-        StaticNode::Protocols => 5,
+        StaticNode::Passwd => 3,
+        StaticNode::Group => 4,
+        StaticNode::Hosts => 5,
+        StaticNode::ResolvConf => 6,
+        StaticNode::Protocols => 7,
     };
     stat.nlink = if node == StaticNode::EtcDir { 2 } else { 1 };
     stat.size = content(node).map_or(0, |content| content.len() as u64);
