@@ -135,11 +135,18 @@ pub struct CapabilitySets {
 }
 
 impl CapabilitySets {
-    const CAP_LAST_CAP: usize = 40;
+    pub const CAP_LAST_CAP: usize = 40;
 
     fn all_known_bits() -> [u32; 2] {
         let high_bits = Self::CAP_LAST_CAP + 1 - u32::BITS as usize;
         [u32::MAX, (1u32 << high_bits) - 1]
+    }
+
+    fn cap_bit(cap: usize) -> Option<(usize, u32)> {
+        if cap > Self::CAP_LAST_CAP {
+            return None;
+        }
+        Some((cap / u32::BITS as usize, 1u32 << (cap % u32::BITS as usize)))
     }
 
     pub fn root() -> Self {
@@ -150,6 +157,22 @@ impl CapabilitySets {
             inheritable: [0; 2],
             bounding: all,
         }
+    }
+
+    pub fn has_effective(&self, cap: usize) -> Option<bool> {
+        let (index, mask) = Self::cap_bit(cap)?;
+        Some(self.effective[index] & mask != 0)
+    }
+
+    pub fn bounding_contains(&self, cap: usize) -> Option<bool> {
+        let (index, mask) = Self::cap_bit(cap)?;
+        Some(self.bounding[index] & mask != 0)
+    }
+
+    pub fn drop_bounding(&mut self, cap: usize) -> Option<()> {
+        let (index, mask) = Self::cap_bit(cap)?;
+        self.bounding[index] &= !mask;
+        Some(())
     }
 }
 

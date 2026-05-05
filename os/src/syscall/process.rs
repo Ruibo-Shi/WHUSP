@@ -36,6 +36,9 @@ const LINUX_CAPABILITY_VERSION_2: u32 = 0x2007_1026;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const LINUX_CAPABILITY_U32S_1: usize = 1;
 const LINUX_CAPABILITY_U32S_2: usize = 2;
+const CAP_SETPCAP: usize = 8;
+const PR_CAPBSET_READ: usize = 23;
+const PR_CAPBSET_DROP: usize = 24;
 
 struct ScriptInterpreter {
     path: String,
@@ -409,6 +412,37 @@ pub fn sys_capset(hdrp: *mut LinuxCapUserHeader, datap: *const LinuxCapUserData)
         }
         Ok(0)
     })
+}
+
+pub fn sys_prctl(option: usize, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> SysResult {
+    let _ = (arg3, arg4, arg5);
+    match option {
+        PR_CAPBSET_READ => current_process()
+            .credentials()
+            .capabilities
+            .bounding_contains(arg2)
+            .map(|present| present as isize)
+            .ok_or(SysError::EINVAL),
+        PR_CAPBSET_DROP => {
+            current_process().mutate_credentials(|credentials| {
+                let capabilities = &mut credentials.capabilities;
+                if !capabilities
+                    .has_effective(CAP_SETPCAP)
+                    .ok_or(SysError::EINVAL)?
+                {
+                    return Err(SysError::EPERM);
+                }
+                // UNFINISHED: Linux applies this to the per-thread capability
+                // bounding set and interacts with user namespaces, securebits,
+                // ambient/file capabilities, and execve propagation. This
+                // contest subset stores a process-wide bounding set so LTP
+                // capability error-path tests can exercise capset semantics.
+                capabilities.drop_bounding(arg2).ok_or(SysError::EINVAL)?;
+                Ok(0)
+            })
+        }
+        _ => Err(SysError::EINVAL),
+    }
 }
 
 pub fn sys_getgroups(size: usize, list: *mut u32) -> SysResult {
