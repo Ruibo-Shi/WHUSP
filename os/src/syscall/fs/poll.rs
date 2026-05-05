@@ -10,6 +10,9 @@ use super::fd::get_file_by_fd;
 use super::uapi::{LinuxPollFd, LinuxTimeSpec, PPOLL_MAX_NFDS};
 use super::user_ptr::{read_user_value, write_user_value};
 
+const SELECT_MAX_NFDS: usize = 1024;
+const FD_SET_WORD_BITS: usize = usize::BITS as usize;
+
 fn read_user_pollfds(
     token: usize,
     fds: *const LinuxPollFd,
@@ -120,6 +123,138 @@ pub fn sys_ppoll(
                 write_user_pollfds(token, fds, &pollfds)?;
                 return Ok(0);
             }
+        }
+        suspend_current_and_run_next();
+    }
+}
+
+fn fdset_words(nfds: usize) -> usize {
+    nfds.div_ceil(FD_SET_WORD_BITS)
+}
+
+fn read_user_fdset(token: usize, ptr: usize, nfds: usize) -> SysResult<Option<Vec<usize>>> {
+    if ptr == 0 {
+        return Ok(None);
+    }
+    let mut words = Vec::with_capacity(fdset_words(nfds));
+    for index in 0..fdset_words(nfds) {
+        let word_addr = ptr
+            .checked_add(
+                index
+                    .checked_mul(size_of::<usize>())
+                    .ok_or(SysError::EFAULT)?,
+            )
+            .ok_or(SysError::EFAULT)?;
+        words.push(read_user_value(token, word_addr as *const usize)?);
+    }
+    Ok(Some(words))
+}
+
+fn write_user_fdset(token: usize, ptr: usize, words: &[usize]) -> SysResult {
+    if ptr == 0 {
+        return Ok(0);
+    }
+    for (index, word) in words.iter().enumerate() {
+        let word_addr = ptr
+            .checked_add(
+                index
+                    .checked_mul(size_of::<usize>())
+                    .ok_or(SysError::EFAULT)?,
+            )
+            .ok_or(SysError::EFAULT)?;
+        write_user_value(token, word_addr as *mut usize, word)?;
+    }
+    Ok(0)
+}
+
+fn fd_is_set(words: &[usize], fd: usize) -> bool {
+    let word = fd / FD_SET_WORD_BITS;
+    let bit = fd % FD_SET_WORD_BITS;
+    words
+        .get(word)
+        .is_some_and(|word| word & (1usize << bit) != 0)
+}
+
+fn fd_set(words: &mut [usize], fd: usize) {
+    let word = fd / FD_SET_WORD_BITS;
+    let bit = fd % FD_SET_WORD_BITS;
+    if let Some(word) = words.get_mut(word) {
+        *word |= 1usize << bit;
+    }
+}
+
+fn scan_fdset(
+    nfds: usize,
+    input: Option<&[usize]>,
+    output: &mut [usize],
+    events: PollEvents,
+) -> SysResult<usize> {
+    let Some(input) = input else {
+        return Ok(0);
+    };
+    let mut ready = 0usize;
+    for fd in 0..nfds {
+        if !fd_is_set(input, fd) {
+            continue;
+        }
+        let file = get_file_by_fd(fd)?;
+        if file.poll(events).intersects(events) {
+            fd_set(output, fd);
+            ready += 1;
+        }
+    }
+    Ok(ready)
+}
+
+pub fn sys_pselect6(
+    nfds: usize,
+    readfds: usize,
+    writefds: usize,
+    exceptfds: usize,
+    timeout: *const LinuxTimeSpec,
+    _sigmask: usize,
+) -> SysResult {
+    // UNFINISHED: pselect6 signal-mask installation and EINTR wakeups are not
+    // implemented; the mask argument is accepted as a no-op for libc select()
+    // compatibility on the netperf path.
+    if nfds > SELECT_MAX_NFDS {
+        return Err(SysError::EINVAL);
+    }
+
+    let token = current_user_token();
+    let read_input = read_user_fdset(token, readfds, nfds)?;
+    let write_input = read_user_fdset(token, writefds, nfds)?;
+    let except_input = read_user_fdset(token, exceptfds, nfds)?;
+    let deadline_ms = relative_timeout_deadline_ms(token, timeout)?;
+    let word_count = fdset_words(nfds);
+
+    loop {
+        let mut read_output = Vec::from_iter(core::iter::repeat(0usize).take(word_count));
+        let mut write_output = Vec::from_iter(core::iter::repeat(0usize).take(word_count));
+        let mut except_output = Vec::from_iter(core::iter::repeat(0usize).take(word_count));
+
+        let ready = scan_fdset(
+            nfds,
+            read_input.as_deref(),
+            &mut read_output,
+            PollEvents::POLLIN | PollEvents::POLLHUP | PollEvents::POLLRDHUP,
+        )? + scan_fdset(
+            nfds,
+            write_input.as_deref(),
+            &mut write_output,
+            PollEvents::POLLOUT,
+        )? + scan_fdset(
+            nfds,
+            except_input.as_deref(),
+            &mut except_output,
+            PollEvents::POLLPRI,
+        )?;
+
+        if ready > 0 || deadline_ms.is_some_and(|deadline_ms| get_time_ms() >= deadline_ms) {
+            write_user_fdset(token, readfds, &read_output)?;
+            write_user_fdset(token, writefds, &write_output)?;
+            write_user_fdset(token, exceptfds, &except_output)?;
+            return Ok(ready as isize);
         }
         suspend_current_and_run_next();
     }

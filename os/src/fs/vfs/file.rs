@@ -200,6 +200,10 @@ pub(crate) fn lookup_dir_at(cwd: WorkingDir, name: &str) -> FsResult<WorkingDir>
 }
 
 impl File for VfsFile {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn readable(&self) -> bool {
         self.readable
     }

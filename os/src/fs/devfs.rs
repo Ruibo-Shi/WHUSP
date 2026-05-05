@@ -15,6 +15,8 @@ enum DevNode {
     Misc,
     Null,
     Zero,
+    Random,
+    Urandom,
     Tty,
     TtyS0,
     Rtc,
@@ -27,9 +29,11 @@ impl DevNode {
             Self::Misc => 2,
             Self::Null => 3,
             Self::Zero => 4,
-            Self::Tty => 5,
-            Self::TtyS0 => 6,
-            Self::Rtc => 7,
+            Self::Random => 5,
+            Self::Urandom => 6,
+            Self::Tty => 7,
+            Self::TtyS0 => 8,
+            Self::Rtc => 9,
         }
     }
 
@@ -38,6 +42,8 @@ impl DevNode {
             Self::Root | Self::Misc => 0,
             Self::Null => linux_makedev(1, 3),
             Self::Zero => linux_makedev(1, 5),
+            Self::Random => linux_makedev(1, 8),
+            Self::Urandom => linux_makedev(1, 9),
             Self::Tty => linux_makedev(5, 0),
             Self::TtyS0 => linux_makedev(4, 64),
             Self::Rtc => linux_makedev(253, 0),
@@ -75,7 +81,7 @@ struct DevDirEntry {
     dtype: u8,
 }
 
-const ROOT_DEV_DIR_ENTRIES: [DevDirEntry; 9] = [
+const ROOT_DEV_DIR_ENTRIES: [DevDirEntry; 11] = [
     DevDirEntry {
         node: DevNode::Root,
         name: b".",
@@ -94,6 +100,16 @@ const ROOT_DEV_DIR_ENTRIES: [DevDirEntry; 9] = [
     DevDirEntry {
         node: DevNode::Zero,
         name: b"zero",
+        dtype: DT_CHR,
+    },
+    DevDirEntry {
+        node: DevNode::Random,
+        name: b"random",
+        dtype: DT_CHR,
+    },
+    DevDirEntry {
+        node: DevNode::Urandom,
+        name: b"urandom",
         dtype: DT_CHR,
     },
     DevDirEntry {
@@ -155,6 +171,8 @@ fn lookup_absolute(path: &str) -> Option<DevNode> {
         "/dev/misc" | "/dev/misc/" => Some(DevNode::Misc),
         "/dev/null" => Some(DevNode::Null),
         "/dev/zero" => Some(DevNode::Zero),
+        "/dev/random" => Some(DevNode::Random),
+        "/dev/urandom" => Some(DevNode::Urandom),
         "/dev/tty" => Some(DevNode::Tty),
         "/dev/ttyS0" => Some(DevNode::TtyS0),
         "/dev/rtc" | "/dev/rtc0" | "/dev/misc/rtc" => Some(DevNode::Rtc),
@@ -169,6 +187,8 @@ fn lookup_child(parent: DevNode, path: &str) -> Option<DevNode> {
             "misc" => Some(DevNode::Misc),
             "null" => Some(DevNode::Null),
             "zero" => Some(DevNode::Zero),
+            "random" => Some(DevNode::Random),
+            "urandom" => Some(DevNode::Urandom),
             "tty" => Some(DevNode::Tty),
             "ttyS0" => Some(DevNode::TtyS0),
             "rtc" | "rtc0" => Some(DevNode::Rtc),
@@ -328,6 +348,16 @@ fn read_zero(user_buf: UserBuffer) -> usize {
     len
 }
 
+fn read_random(user_buf: UserBuffer) -> usize {
+    let len = user_buf.len();
+    for (index, byte_ref) in user_buf.into_iter().enumerate() {
+        unsafe {
+            *byte_ref = (index as u8).wrapping_mul(37).wrapping_add(0xa5);
+        }
+    }
+    len
+}
+
 fn dir_entries(node: DevNode) -> Option<&'static [DevDirEntry]> {
     match node {
         DevNode::Root => Some(&ROOT_DEV_DIR_ENTRIES),
@@ -383,6 +413,10 @@ fn copy_dirents(
 }
 
 impl File for DevFsFile {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn readable(&self) -> bool {
         self.readable
     }
@@ -395,6 +429,7 @@ impl File for DevFsFile {
         match self.node {
             DevNode::Root | DevNode::Misc | DevNode::Null | DevNode::Rtc => 0,
             DevNode::Zero => read_zero(user_buf),
+            DevNode::Random | DevNode::Urandom => read_random(user_buf),
             DevNode::Tty | DevNode::TtyS0 => read_console(user_buf),
         }
     }
@@ -402,7 +437,7 @@ impl File for DevFsFile {
     fn write(&self, user_buf: UserBuffer) -> usize {
         match self.node {
             DevNode::Root | DevNode::Misc | DevNode::Rtc => 0,
-            DevNode::Null | DevNode::Zero => user_buf.len(),
+            DevNode::Null | DevNode::Zero | DevNode::Random | DevNode::Urandom => user_buf.len(),
             DevNode::Tty | DevNode::TtyS0 => write_console(user_buf),
         }
     }

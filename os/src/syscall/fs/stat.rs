@@ -1,6 +1,6 @@
 use crate::fs::{
     FileStat, MountId, WorkingDir, stat_at, stat_devfs_child, stat_devfs_misc_child,
-    statfs_for_mount,
+    stat_static_path, statfs_for_mount,
 };
 use crate::task::{current_process, current_user_token};
 
@@ -51,6 +51,9 @@ pub(super) fn resolve_stat(
             };
             return stat.ok_or(SysError::ENOENT);
         }
+    }
+    if is_absolute && let Some(stat) = stat_static_path(path) {
+        return Ok(stat);
     }
     let base = if is_absolute {
         WorkingDir::root()

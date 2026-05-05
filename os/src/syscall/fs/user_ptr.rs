@@ -1,4 +1,4 @@
-use crate::mm::{PageTable, StepByOne, VirtAddr};
+use crate::mm::{MmapFaultAccess, PageTable, StepByOne, VirtAddr};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::mem::{MaybeUninit, size_of};
@@ -12,6 +12,14 @@ pub(crate) enum UserBufferAccess {
 }
 
 pub(crate) type UserFaultHandler = fn(usize, UserBufferAccess) -> bool;
+
+fn mmap_user_fault(addr: usize, access: UserBufferAccess) -> bool {
+    let access = match access {
+        UserBufferAccess::Read => MmapFaultAccess::Read,
+        UserBufferAccess::Write => MmapFaultAccess::Write,
+    };
+    crate::arch::trap::handle_mmap_page_fault(addr, access)
+}
 
 pub(crate) fn translated_byte_buffer_checked(
     token: usize,
@@ -97,11 +105,12 @@ pub(crate) fn read_user_c_string(
         let addr = (ptr as usize).checked_add(offset).ok_or(SysError::EFAULT)?;
         let page_remaining = crate::config::PAGE_SIZE - (addr & (crate::config::PAGE_SIZE - 1));
         let chunk_len = page_remaining.min(max_len - offset);
-        let buffers = translated_byte_buffer_checked(
+        let buffers = translated_byte_buffer_checked_with_fault(
             token,
             addr as *const u8,
             chunk_len,
             UserBufferAccess::Read,
+            Some(mmap_user_fault),
         )?;
         for buffer in &buffers {
             for &byte in buffer.iter() {

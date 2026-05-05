@@ -7,6 +7,7 @@ mod mount;
 mod path;
 mod pipe;
 mod procfs;
+mod staticfs;
 mod status_flags;
 mod stdio;
 mod tmpfs;
@@ -14,6 +15,7 @@ mod vfs;
 
 use crate::mm::{UserBuffer, page_cache::PageCacheId};
 use bitflags::bitflags;
+use core::any::Any;
 
 const DEFAULT_BLOCK_SIZE: u32 = 4096;
 
@@ -98,6 +100,7 @@ impl FileStat {
 }
 
 pub trait File: Send + Sync {
+    fn as_any(&self) -> &dyn Any;
     fn readable(&self) -> bool;
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
@@ -198,6 +201,7 @@ pub(crate) use mount::{
 };
 pub(crate) use path::{WorkingDir, normalize_path};
 pub use pipe::make_pipe;
+pub(crate) use staticfs::{open_path as open_static_path, stat_path as stat_static_path};
 pub use stdio::{Stdin, Stdout};
 pub(crate) use vfs::open_file;
 pub(crate) use vfs::{FileSystemStat, FsError, FsResult, lookup_dir_at, open_file_at, stat_at};

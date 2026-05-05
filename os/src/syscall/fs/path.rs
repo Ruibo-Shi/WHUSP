@@ -12,8 +12,8 @@ use super::user_ptr::{
 };
 use crate::fs::{
     File, FileStat, FileTimestamp, OpenFlags, WorkingDir, link_file_at, lookup_dir_at, mkdir_at,
-    normalize_path, open_devfs_child, open_devfs_misc_child, open_file_at, rename_at, rmdir_at,
-    symlink_at, unlink_file_at,
+    normalize_path, open_devfs_child, open_devfs_misc_child, open_file_at, open_static_path,
+    rename_at, rmdir_at, symlink_at, unlink_file_at,
 };
 use crate::mm::UserBuffer;
 use crate::task::{FdTableEntry, current_process, current_user_token};
@@ -210,6 +210,11 @@ pub fn sys_openat(dirfd: isize, path: *const u8, flags: u32, _mode: u32) -> SysR
         return install_open_file(file, flags, None);
     }
     let dir_path = openat_dir_path(dirfd, path.as_str())?;
+    if let Some(path) = dir_path.as_deref()
+        && let Some(file) = open_static_path(path, flags)?
+    {
+        return install_open_file(file, flags, None);
+    }
     let base = path_base(dirfd, path.as_str())?;
     let file = open_file_at(base, path.as_str(), flags)?;
     install_open_file(file, flags, dir_path)

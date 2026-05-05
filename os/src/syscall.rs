@@ -22,6 +22,7 @@ const SYSCALL_READ: usize = 63;
 const SYSCALL_WRITE: usize = 64;
 const SYSCALL_READV: usize = 65;
 const SYSCALL_WRITEV: usize = 66;
+const SYSCALL_PSELECT6: usize = 72;
 const SYSCALL_PPOLL: usize = 73;
 const SYSCALL_READLINKAT: usize = 78;
 const SYSCALL_NEWFSTATAT: usize = 79;
@@ -182,6 +183,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_READ => sys_read(args[0], args[1] as *const u8, args[2]),
         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
         SYSCALL_WRITEV => sys_writev(args[0], args[1] as *const LinuxIovec, args[2]),
+        SYSCALL_PSELECT6 => sys_pselect6(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4] as *const LinuxTimeSpec,
+            args[5],
+        ),
         SYSCALL_PPOLL => sys_ppoll(
             args[0] as *mut LinuxPollFd,
             args[1],
