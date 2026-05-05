@@ -66,6 +66,19 @@ pub fn sys_shmat(shmid: usize, shmaddr: usize, shmflg: i32) -> SysResult {
     }
 }
 
+pub fn sys_shmctl(shmid: usize, cmd: i32, _buf: usize) -> SysResult {
+    match cmd {
+        crate::mm::shm::IPC_RMID => {
+            crate::mm::shm::mark_segment_for_delete(shmid, current_process().getpid())
+                .map_err(shm_error_to_sys_error)?;
+            Ok(0)
+        }
+        // UNFINISHED: IPC_STAT, IPC_SET, IPC_INFO, SHM_STAT, SHM_INFO, and
+        // SHM_LOCK/UNLOCK need Linux-compatible shmid_ds/ucred handling.
+        _ => Err(SysError::EINVAL),
+    }
+}
+
 pub fn sys_mmap(
     addr: usize,
     len: usize,
