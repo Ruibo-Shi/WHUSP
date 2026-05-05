@@ -183,31 +183,79 @@ impl MemorySet {
         let old_mapped_end = self.brk_mapped_end;
         let new_mapped_end = page_align_up(addr);
         let heap_start_vpn = VirtAddr::from(self.brk_base).floor();
-        let area_idx = self
-            .areas
-            .iter()
-            .position(|area| area.vpn_range.get_start() == heap_start_vpn)
-            .expect("heap area missing from user memory set");
-        let heap_area = &mut self.areas[area_idx];
+        let old_end_vpn = VirtAddr::from(old_mapped_end).floor();
+        let new_end_vpn = VirtAddr::from(new_mapped_end).floor();
 
         if new_mapped_end > old_mapped_end {
-            let start_vpn = VirtAddr::from(old_mapped_end).floor();
-            let end_vpn = VirtAddr::from(new_mapped_end).floor();
-            for vpn in VPNRange::new(start_vpn, end_vpn) {
+            let Some(area_idx) = self.find_brk_extension_area(heap_start_vpn, old_end_vpn) else {
+                if self.range_overlaps(old_mapped_end, new_mapped_end) {
+                    return self.brk;
+                }
+                let mut heap_area = MapArea::new(
+                    old_mapped_end.into(),
+                    new_mapped_end.into(),
+                    MapType::Framed,
+                    MapPermission::R | MapPermission::W | MapPermission::U,
+                );
+                heap_area.map(&mut self.page_table);
+                self.areas.push(heap_area);
+                self.brk = addr;
+                self.brk_mapped_end = new_mapped_end;
+                return self.brk;
+            };
+            let heap_area = &mut self.areas[area_idx];
+            for vpn in VPNRange::new(old_end_vpn, new_end_vpn) {
                 heap_area.map_one(&mut self.page_table, vpn);
             }
+            let area_start = heap_area.vpn_range.get_start();
+            heap_area.vpn_range = VPNRange::new(area_start, new_end_vpn);
         } else if new_mapped_end < old_mapped_end {
-            let start_vpn = VirtAddr::from(new_mapped_end).floor();
-            let end_vpn = VirtAddr::from(old_mapped_end).floor();
-            for vpn in VPNRange::new(start_vpn, end_vpn) {
-                heap_area.unmap_one(&mut self.page_table, vpn);
-            }
+            self.shrink_brk_areas(heap_start_vpn, new_end_vpn, old_end_vpn);
         }
 
-        heap_area.vpn_range = VPNRange::new(heap_start_vpn, VirtAddr::from(new_mapped_end).floor());
         self.brk = addr;
         self.brk_mapped_end = new_mapped_end;
         self.brk
+    }
+
+    fn find_brk_extension_area(
+        &self,
+        heap_start_vpn: super::VirtPageNum,
+        old_end_vpn: super::VirtPageNum,
+    ) -> Option<usize> {
+        self.areas.iter().position(|area| {
+            !area.is_mmap()
+                && !area.is_shm()
+                && area.vpn_range.get_start() >= heap_start_vpn
+                && area.vpn_range.get_end() == old_end_vpn
+        })
+    }
+
+    fn shrink_brk_areas(
+        &mut self,
+        heap_start_vpn: super::VirtPageNum,
+        new_end_vpn: super::VirtPageNum,
+        old_end_vpn: super::VirtPageNum,
+    ) {
+        self.split_area_at(new_end_vpn);
+        self.split_area_at(old_end_vpn);
+
+        let mut idx = 0;
+        while idx < self.areas.len() {
+            let area_start = self.areas[idx].vpn_range.get_start();
+            let area_end = self.areas[idx].vpn_range.get_end();
+            if !self.areas[idx].is_mmap()
+                && !self.areas[idx].is_shm()
+                && area_start >= heap_start_vpn
+                && area_start >= new_end_vpn
+                && area_end <= old_end_vpn
+            {
+                let mut area = self.areas.remove(idx);
+                area.unmap(&mut self.page_table);
+            } else {
+                idx += 1;
+            }
+        }
     }
 
     pub fn mmap_area(
