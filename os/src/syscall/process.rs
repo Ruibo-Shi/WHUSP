@@ -1,5 +1,5 @@
 use crate::fs::{File, OpenFlags, open_file_at};
-use crate::mm::{elf_required_interpreter_path, translated_ref, translated_refmut, translated_str};
+use crate::mm::{elf_required_interpreter_path, translated_refmut};
 use crate::sbi::shutdown;
 use crate::task::{
     CloneArgs, CloneFlags, ProcessCpuTimesSnapshot, RLimit, RLimitResource, SignalFlags,
@@ -14,7 +14,9 @@ use alloc::vec::Vec;
 use core::str;
 
 use super::errno::{SysError, SysResult};
-use super::fs::user_ptr::{read_user_value, write_user_value};
+use super::fs::user_ptr::{
+    PATH_MAX, read_user_c_string, read_user_usize, read_user_value, write_user_value,
+};
 
 const ELF_MAGIC: &[u8] = b"\x7fELF";
 const SHEBANG_MAGIC: &[u8] = b"#!";
@@ -880,22 +882,26 @@ fn sys_clone_thread(args: CloneArgs) -> SysResult {
     Ok(cloned.linux_tid as isize)
 }
 
-fn translated_string_array(token: usize, mut ptr: *const usize) -> Vec<String> {
+fn translated_string_array(token: usize, mut ptr: *const usize) -> SysResult<Vec<String>> {
     if ptr.is_null() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut strings = Vec::new();
     loop {
-        let string_ptr = *translated_ref(token, ptr);
+        let string_ptr = read_user_usize(token, ptr as usize)?;
         if string_ptr == 0 {
             break;
         }
-        strings.push(translated_str(token, string_ptr as *const u8));
+        strings.push(read_user_c_string(
+            token,
+            string_ptr as *const u8,
+            PATH_MAX,
+        )?);
         unsafe {
             ptr = ptr.add(1);
         }
     }
-    strings
+    Ok(strings)
 }
 
 fn is_space_or_tab(byte: u8) -> bool {
@@ -1140,9 +1146,9 @@ fn exec_path(path: String, args: Vec<String>, envs: Vec<String>) -> SysResult {
 
 pub fn sys_execve(path: *const u8, args: *const usize, envs: *const usize) -> SysResult {
     let token = current_user_token();
-    let path = translated_str(token, path);
-    let args_vec = translated_string_array(token, args);
-    let envs_vec = translated_string_array(token, envs);
+    let path = read_user_c_string(token, path, PATH_MAX)?;
+    let args_vec = translated_string_array(token, args)?;
+    let envs_vec = translated_string_array(token, envs)?;
     exec_path(path, args_vec, envs_vec)
 }
 

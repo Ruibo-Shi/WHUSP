@@ -1,6 +1,5 @@
 use super::{FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, frame_alloc};
 use crate::arch::mm as arch_mm;
-use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -185,33 +184,6 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
-}
-
-/// Load a string from other address spaces into kernel space without an end `\0`.
-pub fn translated_str(token: usize, ptr: *const u8) -> String {
-    let page_table = PageTable::from_token(token);
-    let mut string = String::new();
-    let mut va = ptr as usize;
-    loop {
-        let ch: u8 = *(page_table
-            .translate_va(VirtAddr::from(va))
-            .unwrap()
-            .get_mut());
-        if ch == 0 {
-            break;
-        }
-        string.push(ch as char);
-        va += 1;
-    }
-    string
-}
-
-pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
-    let page_table = PageTable::from_token(token);
-    page_table
-        .translate_va(VirtAddr::from(ptr as usize))
-        .unwrap()
-        .get_ref()
 }
 
 pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {

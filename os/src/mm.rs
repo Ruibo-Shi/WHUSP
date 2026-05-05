@@ -18,8 +18,7 @@ pub use frame_allocator::{FrameTracker, frame_alloc, frame_alloc_more, frame_sta
 pub use kernel_space::{KERNEL_SPACE, kernel_token};
 pub use memory_set::MemorySet;
 pub use page_table::{
-    PageTable, PageTableEntry, UserBuffer, translated_byte_buffer, translated_ref,
-    translated_refmut, translated_str,
+    PageTable, PageTableEntry, UserBuffer, translated_byte_buffer, translated_refmut,
 };
 pub use user_space::{MemoryProtectError, MmapFaultAccess, MmapFaultResult};
 

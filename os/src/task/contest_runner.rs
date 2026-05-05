@@ -90,6 +90,8 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "ebizzy",
     "eject*",
     "fanout01",
+    "fcntl14",
+    "fcntl14_64",
     "filecapstest.sh",
     "find_portbundle",
     "force_erase.sh",
