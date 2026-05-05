@@ -85,6 +85,7 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "dccp*",
     "delete_module02",
     "dhcp*",
+    "dirtyc0w*",
     "dns*",
     "doio",
     "ebizzy",
