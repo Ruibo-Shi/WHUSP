@@ -142,6 +142,7 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "mmapstress10",
     "memcg_test_2",
     "memcg_test_4",
+    "mmstress",
     "mmstress_dummy",
     "mpls*",
     "open_by_handle_at*",

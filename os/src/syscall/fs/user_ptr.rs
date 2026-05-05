@@ -30,6 +30,15 @@ pub(crate) fn translated_byte_buffer_checked(
     translated_byte_buffer_checked_with_fault(token, ptr, len, access, None)
 }
 
+pub(crate) fn translated_byte_buffer_checked_with_mmap_fault(
+    token: usize,
+    ptr: *const u8,
+    len: usize,
+    access: UserBufferAccess,
+) -> SysResult<Vec<&'static mut [u8]>> {
+    translated_byte_buffer_checked_with_fault(token, ptr, len, access, Some(mmap_user_fault))
+}
+
 // TODO: i think these functions are taking the responsibility of the mm module
 pub(crate) fn translated_byte_buffer_checked_with_fault(
     token: usize,
@@ -48,7 +57,18 @@ pub(crate) fn translated_byte_buffer_checked_with_fault(
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
-        let mut pte = page_table.translate(vpn).ok_or(SysError::EFAULT)?;
+        let mut pte = match page_table.translate(vpn) {
+            Some(pte) => pte,
+            None => {
+                let Some(fault_handler) = fault_handler else {
+                    return Err(SysError::EFAULT);
+                };
+                if !fault_handler(start, access) {
+                    return Err(SysError::EFAULT);
+                }
+                page_table.translate(vpn).ok_or(SysError::EFAULT)?
+            }
+        };
         let reject_zero_ppn = fault_handler.is_some();
         if !user_pte_allows(pte, access, reject_zero_ppn) {
             if let Some(fault_handler) = fault_handler {

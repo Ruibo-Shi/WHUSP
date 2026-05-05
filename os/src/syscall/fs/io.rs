@@ -1,5 +1,5 @@
 use crate::fs::{File, OpenFlags, PollEvents, S_IFDIR, S_IFREG, SeekWhence};
-use crate::mm::{UserBuffer, translated_byte_buffer};
+use crate::mm::UserBuffer;
 use crate::task::{FdTableEntry, current_user_token};
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -7,7 +7,10 @@ use core::mem::size_of;
 use super::super::errno::{SysError, SysResult};
 use super::fd::{get_fd_entry_by_fd, get_file_by_fd};
 use super::uapi::{IOV_MAX, LinuxIovec};
-use super::user_ptr::{UserBufferAccess, read_user_usize, translated_byte_buffer_checked};
+use super::user_ptr::{
+    UserBufferAccess, read_user_usize, translated_byte_buffer_checked,
+    translated_byte_buffer_checked_with_mmap_fault,
+};
 
 fn read_user_iovecs(
     token: usize,
@@ -326,10 +329,9 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> SysResult {
         return Err(SysError::EBADF);
     }
     ensure_nonblocking_ready(&entry, PollEvents::POLLOUT)?;
-    Ok(write_with_status_flags(
-        &entry,
-        UserBuffer::new(translated_byte_buffer(token, buf, len)),
-    ) as isize)
+    let buffers =
+        translated_byte_buffer_checked_with_mmap_fault(token, buf, len, UserBufferAccess::Read)?;
+    Ok(write_with_status_flags(&entry, UserBuffer::new(buffers)) as isize)
 }
 
 pub fn sys_writev(fd: usize, iov: *const LinuxIovec, iovcnt: usize) -> SysResult {
@@ -439,5 +441,7 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> SysResult {
         return Err(SysError::EBADF);
     }
     ensure_nonblocking_ready(&entry, PollEvents::POLLIN)?;
-    Ok(file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize)
+    let buffers =
+        translated_byte_buffer_checked_with_mmap_fault(token, buf, len, UserBufferAccess::Write)?;
+    Ok(file.read(UserBuffer::new(buffers)) as isize)
 }
