@@ -15,7 +15,7 @@ use crate::fs::{
     File, FileStat, FileTimestamp, MountId, OpenFlags, S_IFDIR, S_IFREG, WorkingDir, link_file_at,
     lookup_dir_at, mkdir_at, mount_is_read_only, normalize_path, open_devfs_child,
     open_devfs_misc_child, open_file_at, open_static_path, rename_at, rmdir_at, symlink_at,
-    unlink_file_at,
+    truncate_at, unlink_file_at,
 };
 use crate::mm::UserBuffer;
 use crate::task::{FdTableEntry, current_process, current_user_token};
@@ -293,6 +293,32 @@ pub fn sys_openat(dirfd: isize, path: *const u8, flags: u32, _mode: u32) -> SysR
     let base = path_base(dirfd, path.as_str())?;
     let file = open_file_at(base, path.as_str(), flags)?;
     install_open_file(file, flags, dir_path)
+}
+
+pub fn sys_truncate(path: *const u8, len: usize) -> SysResult {
+    if len > isize::MAX as usize {
+        return Err(SysError::EINVAL);
+    }
+
+    let token = current_user_token();
+    let path = read_user_c_string(token, path, PATH_MAX)?;
+    if path.is_empty() {
+        return Err(SysError::ENOENT);
+    }
+
+    let credentials = current_process().credentials();
+    let subject = AccessSubject {
+        uid: credentials.fsuid,
+        gid: credentials.fsgid,
+        groups: &credentials.groups,
+    };
+    check_access_path_prefixes(AT_FDCWD, path.as_str(), subject)?;
+    let stat = resolve_stat(AT_FDCWD, path.as_str(), true)?;
+    check_access_mode(&stat, W_OK, subject)?;
+
+    let base = path_base(AT_FDCWD, path.as_str())?;
+    truncate_at(base, path.as_str(), len)?;
+    Ok(0)
 }
 
 fn do_faccessat(

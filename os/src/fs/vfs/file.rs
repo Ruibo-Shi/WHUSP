@@ -250,6 +250,20 @@ pub(crate) fn chown_at(
     .ok_or(FsError::Io)?
 }
 
+pub(crate) fn truncate_at(cwd: WorkingDir, name: &str, len: usize) -> FsResult {
+    let path = vfs_path::resolve_existing(Some(cwd), name, LookupMode::FollowFinal)?;
+    if path.kind == FsNodeKind::Directory {
+        return Err(FsError::IsDir);
+    }
+    if path.kind != FsNodeKind::RegularFile {
+        return Err(FsError::InvalidInput);
+    }
+    with_mount(path.node.mount_id, |mount| {
+        mount.set_len(path.node.ino, len as u64)
+    })
+    .ok_or(FsError::Io)?
+}
+
 pub(crate) fn lookup_dir_at(cwd: WorkingDir, name: &str) -> FsResult<WorkingDir> {
     vfs_path::resolve_existing(Some(cwd), name, LookupMode::FollowFinal)?
         .working_dir()

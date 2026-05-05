@@ -215,6 +215,7 @@ pub use stdio::{Stdin, Stdout};
 pub(crate) use vfs::open_file;
 pub(crate) use vfs::{
     FileSystemStat, FsError, FsResult, chmod_at, chown_at, lookup_dir_at, open_file_at, stat_at,
+    truncate_at,
 };
 
 pub(self) fn align_up(value: usize, align: usize) -> usize {
