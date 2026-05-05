@@ -22,7 +22,6 @@ pub(crate) enum ShmError {
     Exists,
     Invalid,
     NoMem,
-    Access,
 }
 
 #[derive(Clone, Copy)]
@@ -40,8 +39,8 @@ struct ShmSegment {
     key: isize,
     size: usize,
     aligned_len: usize,
-    mode: u16,
-    creator_pid: usize,
+    _mode: u16,
+    _creator_pid: usize,
     last_pid: usize,
     attach_count: usize,
     marked_for_delete: bool,
@@ -65,8 +64,8 @@ impl ShmSegment {
             key,
             size,
             aligned_len,
-            mode,
-            creator_pid,
+            _mode: mode,
+            _creator_pid: creator_pid,
             last_pid: creator_pid,
             attach_count: 0,
             marked_for_delete: false,

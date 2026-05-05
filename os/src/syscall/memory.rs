@@ -79,6 +79,19 @@ pub fn sys_shmctl(shmid: usize, cmd: i32, _buf: usize) -> SysResult {
     }
 }
 
+pub fn sys_shmdt(shmaddr: usize) -> SysResult {
+    if shmaddr % PAGE_SIZE != 0 {
+        return Err(SysError::EINVAL);
+    }
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+    inner
+        .memory_set
+        .detach_shm_area(shmaddr)
+        .ok_or(SysError::EINVAL)?;
+    Ok(0)
+}
+
 pub fn sys_mmap(
     addr: usize,
     len: usize,
@@ -268,6 +281,5 @@ fn shm_error_to_sys_error(error: ShmError) -> SysError {
         ShmError::Exists => SysError::EEXIST,
         ShmError::Invalid => SysError::EINVAL,
         ShmError::NoMem => SysError::ENOMEM,
-        ShmError::Access => SysError::EACCES,
     }
 }

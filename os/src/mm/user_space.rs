@@ -332,6 +332,19 @@ impl MemorySet {
         Some(start)
     }
 
+    pub fn detach_shm_area(&mut self, start: usize) -> Option<()> {
+        if start % PAGE_SIZE != 0 {
+            return None;
+        }
+        let start_vpn = VirtAddr::from(start).floor();
+        let idx = self.areas.iter().position(|area| {
+            area.is_shm() && area.vpn_range.get_start() == start_vpn
+        })?;
+        let mut area = self.areas.remove(idx);
+        area.unmap_resident(&mut self.page_table);
+        Some(())
+    }
+
     pub fn prepare_mmap_page_fault(
         &mut self,
         addr: usize,

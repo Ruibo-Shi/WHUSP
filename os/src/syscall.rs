@@ -62,6 +62,7 @@ const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SHMGET: usize = 194;
 const SYSCALL_SHMCTL: usize = 195;
 const SYSCALL_SHMAT: usize = 196;
+const SYSCALL_SHMDT: usize = 197;
 const SYSCALL_SOCKET: usize = 198;
 const SYSCALL_SOCKETPAIR: usize = 199;
 const SYSCALL_BIND: usize = 200;
@@ -300,6 +301,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_SHMGET => sys_shmget(args[0] as isize, args[1], args[2] as i32),
         SYSCALL_SHMCTL => sys_shmctl(args[0], args[1] as i32, args[2]),
         SYSCALL_SHMAT => sys_shmat(args[0], args[1], args[2] as i32),
+        SYSCALL_SHMDT => sys_shmdt(args[0]),
         SYSCALL_BRK => sys_brk(args[0]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => sys_mprotect(args[0], args[1], args[2]),
