@@ -53,9 +53,13 @@ pub fn sys_shmat(shmid: usize, shmaddr: usize, shmflg: i32) -> SysResult {
     let attach = crate::mm::shm::attach_segment(shmid, pid).map_err(shm_error_to_sys_error)?;
     let mapped_addr = {
         let mut inner = process.inner_exclusive_access();
-        inner
-            .memory_set
-            .attach_shm_area(requested_addr, attach.len, permission, shmid, &attach.pages)
+        inner.memory_set.attach_shm_area(
+            requested_addr,
+            attach.len,
+            permission,
+            shmid,
+            &attach.pages,
+        )
     };
     match mapped_addr {
         Some(addr) => Ok(addr as isize),

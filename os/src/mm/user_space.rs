@@ -337,9 +337,10 @@ impl MemorySet {
             return None;
         }
         let start_vpn = VirtAddr::from(start).floor();
-        let idx = self.areas.iter().position(|area| {
-            area.is_shm() && area.vpn_range.get_start() == start_vpn
-        })?;
+        let idx = self
+            .areas
+            .iter()
+            .position(|area| area.is_shm() && area.vpn_range.get_start() == start_vpn)?;
         let mut area = self.areas.remove(idx);
         area.unmap_resident(&mut self.page_table);
         Some(())

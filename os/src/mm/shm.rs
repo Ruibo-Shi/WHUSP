@@ -182,9 +182,7 @@ impl ShmManager {
     }
 
     fn page_mappings(&self, shmid: usize) -> Option<Vec<ShmPageMapping>> {
-        self.segments
-            .get(&shmid)
-            .map(ShmSegment::page_mappings)
+        self.segments.get(&shmid).map(ShmSegment::page_mappings)
     }
 
     fn detach(&mut self, shmid: usize, pid: usize) -> Result<(), ShmError> {
