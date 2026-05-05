@@ -239,6 +239,26 @@ impl UserBuffer {
         }
         total
     }
+    pub fn copy_from_slice(&mut self, src: &[u8]) -> usize {
+        let mut copied = 0usize;
+        for buffer in self.buffers.iter_mut() {
+            if copied == src.len() {
+                break;
+            }
+            let dst = &mut **buffer;
+            let len = dst.len().min(src.len() - copied);
+            dst[..len].copy_from_slice(&src[copied..copied + len]);
+            copied += len;
+        }
+        copied
+    }
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(self.len());
+        for buffer in self.buffers.iter() {
+            data.extend_from_slice(buffer);
+        }
+        data
+    }
 }
 
 impl IntoIterator for UserBuffer {

@@ -132,12 +132,13 @@ fn fdset_words(nfds: usize) -> usize {
     nfds.div_ceil(FD_SET_WORD_BITS)
 }
 
-fn read_user_fdset(token: usize, ptr: usize, nfds: usize) -> SysResult<Option<Vec<usize>>> {
-    if ptr == 0 {
-        return Ok(None);
-    }
-    let mut words = Vec::with_capacity(fdset_words(nfds));
-    for index in 0..fdset_words(nfds) {
+fn walk_fdset_words(
+    token: usize,
+    ptr: usize,
+    word_count: usize,
+    mut visit: impl FnMut(usize, usize, usize) -> SysResult,
+) -> SysResult {
+    for index in 0..word_count {
         let word_addr = ptr
             .checked_add(
                 index
@@ -145,8 +146,20 @@ fn read_user_fdset(token: usize, ptr: usize, nfds: usize) -> SysResult<Option<Ve
                     .ok_or(SysError::EFAULT)?,
             )
             .ok_or(SysError::EFAULT)?;
-        words.push(read_user_value(token, word_addr as *const usize)?);
+        visit(token, index, word_addr)?;
     }
+    Ok(0)
+}
+
+fn read_user_fdset(token: usize, ptr: usize, nfds: usize) -> SysResult<Option<Vec<usize>>> {
+    if ptr == 0 {
+        return Ok(None);
+    }
+    let mut words = Vec::with_capacity(fdset_words(nfds));
+    walk_fdset_words(token, ptr, fdset_words(nfds), |token, _index, word_addr| {
+        words.push(read_user_value(token, word_addr as *const usize)?);
+        Ok(0)
+    })?;
     Ok(Some(words))
 }
 
@@ -154,16 +167,11 @@ fn write_user_fdset(token: usize, ptr: usize, words: &[usize]) -> SysResult {
     if ptr == 0 {
         return Ok(0);
     }
-    for (index, word) in words.iter().enumerate() {
-        let word_addr = ptr
-            .checked_add(
-                index
-                    .checked_mul(size_of::<usize>())
-                    .ok_or(SysError::EFAULT)?,
-            )
-            .ok_or(SysError::EFAULT)?;
+    walk_fdset_words(token, ptr, words.len(), |token, index, word_addr| {
+        let word = &words[index];
         write_user_value(token, word_addr as *mut usize, word)?;
-    }
+        Ok(0)
+    })?;
     Ok(0)
 }
 

@@ -56,6 +56,7 @@ const MSG_DONTWAIT: i32 = 0x40;
 const LOOPBACK_IP: [u8; 4] = [127, 0, 0, 1];
 const ANY_IP: [u8; 4] = [0, 0, 0, 0];
 const DEFAULT_SOCKET_BUFFER: i32 = 64 * 1024;
+const MAX_LISTEN_BACKLOG: usize = 128;
 
 lazy_static! {
     static ref LOOPBACK: UPIntrFreeCell<LoopbackState> =
@@ -98,6 +99,7 @@ struct LocalSocketInner {
     stream_rx: VecDeque<u8>,
     datagram_rx: VecDeque<Datagram>,
     listening: bool,
+    listen_backlog: usize,
     read_shutdown: bool,
     write_shutdown: bool,
     peer_write_shutdown: bool,
@@ -147,6 +149,26 @@ impl LoopbackState {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ShutdownState {
+    read: bool,
+    write: bool,
+    peer_write: bool,
+}
+
+impl ShutdownState {
+    const OPEN: Self = Self {
+        read: false,
+        write: false,
+        peer_write: false,
+    };
+    const CLOSED: Self = Self {
+        read: true,
+        write: true,
+        peer_write: true,
+    };
+}
+
 impl LocalSocketInner {
     fn new(kind: SocketKind) -> Self {
         Self {
@@ -158,6 +180,7 @@ impl LocalSocketInner {
             stream_rx: VecDeque::new(),
             datagram_rx: VecDeque::new(),
             listening: false,
+            listen_backlog: 0,
             read_shutdown: false,
             write_shutdown: false,
             peer_write_shutdown: false,
@@ -165,6 +188,23 @@ impl LocalSocketInner {
             sndbuf: DEFAULT_SOCKET_BUFFER,
             rcvbuf: DEFAULT_SOCKET_BUFFER,
         }
+    }
+
+    fn connected(
+        kind: SocketKind,
+        local: InetEndpoint,
+        peer: InetEndpoint,
+        peer_socket: Option<Weak<UPIntrFreeCell<LocalSocketInner>>>,
+        shutdown: ShutdownState,
+    ) -> Self {
+        let mut inner = Self::new(kind);
+        inner.local = Some(local);
+        inner.peer = Some(peer);
+        inner.peer_socket = peer_socket;
+        inner.read_shutdown = shutdown.read;
+        inner.write_shutdown = shutdown.write;
+        inner.peer_write_shutdown = shutdown.peer_write;
+        inner
     }
 }
 
@@ -230,6 +270,7 @@ impl LocalSocket {
             }
         }
         let mut loopback = LOOPBACK.exclusive_access();
+        loopback.prune();
         let endpoint = InetEndpoint {
             ip: LOOPBACK_IP,
             port: loopback.alloc_port(),
@@ -244,13 +285,16 @@ impl LocalSocket {
     }
 
     fn listen(&self, backlog: i32) -> SysResult {
-        let _ = backlog;
+        let backlog = backlog.clamp(1, MAX_LISTEN_BACKLOG as i32) as usize;
         let local = self.ensure_bound(SocketKind::Stream)?;
         let mut loopback = LOOPBACK.exclusive_access();
+        loopback.prune();
         loopback
             .tcp_listeners
             .insert(local.port, Arc::downgrade(&self.inner));
-        self.inner.exclusive_access().listening = true;
+        let mut inner = self.inner.exclusive_access();
+        inner.listening = true;
+        inner.listen_backlog = backlog;
         Ok(0)
     }
 
@@ -286,22 +330,13 @@ impl LocalSocket {
                 // server loop observe `times_up` without leaking a listener.
                 return Ok(Self::from_inner(
                     Arc::new(unsafe {
-                        UPIntrFreeCell::new(LocalSocketInner {
-                            kind: SocketKind::Stream,
-                            local: Some(local),
-                            peer: Some(peer),
-                            peer_socket: None,
-                            accept_queue: VecDeque::new(),
-                            stream_rx: VecDeque::new(),
-                            datagram_rx: VecDeque::new(),
-                            listening: false,
-                            read_shutdown: true,
-                            write_shutdown: true,
-                            peer_write_shutdown: true,
-                            reuse_addr: false,
-                            sndbuf: DEFAULT_SOCKET_BUFFER,
-                            rcvbuf: DEFAULT_SOCKET_BUFFER,
-                        })
+                        UPIntrFreeCell::new(LocalSocketInner::connected(
+                            SocketKind::Stream,
+                            local,
+                            peer,
+                            None,
+                            ShutdownState::CLOSED,
+                        ))
                     }),
                     OpenFlags::RDWR,
                 ));
@@ -333,8 +368,7 @@ impl LocalSocket {
         let connect_deadline_ms = get_time_ms() + 1000;
         let listener = loop {
             let listener = {
-                let mut loopback = LOOPBACK.exclusive_access();
-                loopback.prune();
+                let loopback = LOOPBACK.exclusive_access();
                 loopback
                     .tcp_listeners
                     .get(&remote.port)
@@ -352,24 +386,21 @@ impl LocalSocket {
         };
 
         let server_inner = Arc::new(unsafe {
-            UPIntrFreeCell::new(LocalSocketInner {
-                kind: SocketKind::Stream,
-                local: Some(remote),
-                peer: Some(local),
-                peer_socket: Some(Arc::downgrade(&self.inner)),
-                accept_queue: VecDeque::new(),
-                stream_rx: VecDeque::new(),
-                datagram_rx: VecDeque::new(),
-                listening: false,
-                read_shutdown: false,
-                write_shutdown: false,
-                peer_write_shutdown: false,
-                reuse_addr: false,
-                sndbuf: DEFAULT_SOCKET_BUFFER,
-                rcvbuf: DEFAULT_SOCKET_BUFFER,
-            })
+            UPIntrFreeCell::new(LocalSocketInner::connected(
+                SocketKind::Stream,
+                remote,
+                local,
+                Some(Arc::downgrade(&self.inner)),
+                ShutdownState::OPEN,
+            ))
         });
 
+        {
+            let listener = listener.exclusive_access();
+            if listener.accept_queue.len() >= listener.listen_backlog.max(1) {
+                return Err(SysError::ECONNREFUSED);
+            }
+        }
         {
             let mut client = self.inner.exclusive_access();
             client.peer = Some(remote);
@@ -441,7 +472,7 @@ impl LocalSocket {
                 .iter()
                 .map(|packet| packet.data.len())
                 .sum();
-            let capacity = (target.rcvbuf as usize).max(data.len()).max(1);
+            let capacity = (target.rcvbuf as usize).max(1);
             if queued_bytes.saturating_add(data.len()) <= capacity {
                 target.datagram_rx.push_back(Datagram {
                     data: data.to_vec(),
@@ -464,24 +495,20 @@ impl LocalSocket {
     }
 
     fn recv_stream(&self, buf: UserBuffer, nonblock: bool) -> SysResult<usize> {
+        let mut buf = buf;
         let want = buf.len();
-        let mut copied = 0usize;
-        let mut buf_iter = buf.into_iter();
         loop {
             let mut inner = self.inner.exclusive_access();
-            while copied < want {
-                let Some(byte) = inner.stream_rx.pop_front() else {
-                    break;
-                };
-                let Some(byte_ref) = buf_iter.next() else {
-                    return Ok(copied);
-                };
-                unsafe {
-                    *byte_ref = byte;
-                }
-                copied += 1;
+            if want == 0 {
+                return Ok(0);
             }
-            if copied > 0 || want == 0 {
+            if !inner.stream_rx.is_empty() {
+                let copied = {
+                    let data = inner.stream_rx.make_contiguous();
+                    let len = data.len().min(want);
+                    buf.copy_from_slice(&data[..len])
+                };
+                inner.stream_rx.drain(..copied);
                 return Ok(copied);
             }
             if inner.peer_write_shutdown {
@@ -506,7 +533,8 @@ impl LocalSocket {
         loop {
             let packet = self.inner.exclusive_access().datagram_rx.pop_front();
             if let Some(packet) = packet {
-                let copied = copy_kernel_to_user_buffer(&packet.data, buf);
+                let mut buf = buf;
+                let copied = buf.copy_from_slice(&packet.data);
                 return Ok((copied, Some(packet.from)));
             }
             if nonblock {
@@ -641,35 +669,42 @@ impl File for LocalSocket {
     }
 
     fn write(&self, buf: UserBuffer) -> usize {
-        let mut data = Vec::with_capacity(buf.len());
-        for slice in buf.buffers.iter() {
-            data.extend_from_slice(slice);
-        }
+        let data = buf.to_vec();
         self.send_bytes(&data, None).unwrap_or_default()
     }
 
     fn poll(&self, events: PollEvents) -> PollEvents {
-        let inner = self.inner.exclusive_access();
-        let mut ready = PollEvents::empty();
-        if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI | PollEvents::POLLRDHUP) {
+        let (kind, listening, readable, peer_write_shutdown, write_shutdown, peer) = {
+            let inner = self.inner.exclusive_access();
             let readable = match inner.kind {
                 SocketKind::Stream if inner.listening => !inner.accept_queue.is_empty(),
                 SocketKind::Stream => !inner.stream_rx.is_empty() || inner.peer_write_shutdown,
                 SocketKind::Datagram => !inner.datagram_rx.is_empty(),
             };
+            (
+                inner.kind,
+                inner.listening,
+                readable,
+                inner.peer_write_shutdown,
+                inner.write_shutdown,
+                inner.peer_socket.clone(),
+            )
+        };
+        let mut ready = PollEvents::empty();
+        if events.intersects(PollEvents::POLLIN | PollEvents::POLLPRI | PollEvents::POLLRDHUP) {
             if readable {
                 ready |= PollEvents::POLLIN;
             }
-            if inner.peer_write_shutdown {
+            if peer_write_shutdown {
                 ready |= PollEvents::POLLRDHUP | PollEvents::POLLHUP;
             }
         }
-        if events.contains(PollEvents::POLLOUT) && !inner.write_shutdown {
-            match inner.kind {
-                SocketKind::Stream if !inner.listening => {
-                    if let Some(peer) = inner.peer_socket.as_ref().and_then(Weak::upgrade) {
-                        let peer_inner = peer.exclusive_access();
-                        if peer_inner.stream_rx.len() < (peer_inner.rcvbuf as usize).max(1) {
+        if events.contains(PollEvents::POLLOUT) && !write_shutdown {
+            match kind {
+                SocketKind::Stream if !listening => {
+                    if let Some(peer) = peer.as_ref().and_then(Weak::upgrade) {
+                        let peer = peer.exclusive_access();
+                        if peer.stream_rx.len() < (peer.rcvbuf as usize).max(1) {
                             ready |= PollEvents::POLLOUT;
                         }
                     }
@@ -766,20 +801,6 @@ fn copy_user_to_vec(token: usize, ptr: usize, len: usize) -> SysResult<Vec<u8>> 
         data.extend_from_slice(slice);
     }
     Ok(data)
-}
-
-fn copy_kernel_to_user_buffer(data: &[u8], buf: UserBuffer) -> usize {
-    let mut copied = 0usize;
-    for byte_ref in buf.into_iter() {
-        if copied == data.len() {
-            break;
-        }
-        unsafe {
-            *byte_ref = data[copied];
-        }
-        copied += 1;
-    }
-    copied
 }
 
 fn has_unmasked_signal() -> bool {

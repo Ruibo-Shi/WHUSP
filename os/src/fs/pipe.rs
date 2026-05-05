@@ -3,6 +3,7 @@ use super::{File, FileStat, FsResult, OpenFlags, PollEvents, S_IFIFO};
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
 use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 
 use crate::task::suspend_current_and_run_next;
 
@@ -136,44 +137,38 @@ impl File for Pipe {
     fn writable(&self) -> bool {
         self.writable
     }
-    fn read(&self, buf: UserBuffer) -> usize {
+    fn read(&self, mut buf: UserBuffer) -> usize {
         assert!(self.readable());
         let want_to_read = buf.len();
-        let mut buf_iter = buf.into_iter();
-        let mut already_read = 0usize;
+        if want_to_read == 0 {
+            return 0;
+        }
         loop {
             let mut ring_buffer = self.buffer.exclusive_access();
-            let loop_read = ring_buffer.available_read();
+            let loop_read = ring_buffer.available_read().min(want_to_read);
             if loop_read == 0 {
                 if ring_buffer.all_write_ends_closed() {
-                    return already_read;
+                    return 0;
                 }
                 drop(ring_buffer);
                 suspend_current_and_run_next();
                 continue;
             }
+            let mut data = Vec::with_capacity(loop_read);
             for _ in 0..loop_read {
-                if let Some(byte_ref) = buf_iter.next() {
-                    unsafe {
-                        *byte_ref = ring_buffer.read_byte();
-                    }
-                    already_read += 1;
-                    if already_read == want_to_read {
-                        return want_to_read;
-                    }
-                } else {
-                    return already_read;
-                }
+                data.push(ring_buffer.read_byte());
             }
-            if already_read > 0 {
-                return already_read;
-            }
+            drop(ring_buffer);
+            return buf.copy_from_slice(&data);
         }
     }
     fn write(&self, buf: UserBuffer) -> usize {
         assert!(self.writable());
-        let want_to_write = buf.len();
-        let mut buf_iter = buf.into_iter();
+        let data = buf.to_vec();
+        let want_to_write = data.len();
+        if want_to_write == 0 {
+            return 0;
+        }
         let mut already_write = 0usize;
         loop {
             let mut ring_buffer = self.buffer.exclusive_access();
@@ -183,17 +178,13 @@ impl File for Pipe {
                 suspend_current_and_run_next();
                 continue;
             }
-            // write at most loop_write bytes
-            for _ in 0..loop_write {
-                if let Some(byte_ref) = buf_iter.next() {
-                    ring_buffer.write_byte(unsafe { *byte_ref });
-                    already_write += 1;
-                    if already_write == want_to_write {
-                        return want_to_write;
-                    }
-                } else {
-                    return already_write;
-                }
+            let write_len = loop_write.min(want_to_write - already_write);
+            for &byte in &data[already_write..already_write + write_len] {
+                ring_buffer.write_byte(byte);
+            }
+            already_write += write_len;
+            if already_write == want_to_write {
+                return want_to_write;
             }
         }
     }

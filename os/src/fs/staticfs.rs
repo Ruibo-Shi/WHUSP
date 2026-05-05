@@ -118,22 +118,13 @@ impl File for StaticFile {
         false
     }
 
-    fn read(&self, user_buf: UserBuffer) -> usize {
+    fn read(&self, mut user_buf: UserBuffer) -> usize {
         let Some(content) = content(self.node) else {
             return 0;
         };
         let mut offset = self.offset.exclusive_access();
         let start = (*offset).min(content.len());
-        let mut copied = 0usize;
-        for byte_ref in user_buf.into_iter() {
-            if start + copied == content.len() {
-                break;
-            }
-            unsafe {
-                *byte_ref = content[start + copied];
-            }
-            copied += 1;
-        }
+        let copied = user_buf.copy_from_slice(&content[start..]);
         *offset = start + copied;
         copied
     }
