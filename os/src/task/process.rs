@@ -136,10 +136,11 @@ pub struct Credentials {
     pub egid: u32,
     pub sgid: u32,
     pub fsgid: u32,
+    pub groups: Vec<u32>,
 }
 
 impl Credentials {
-    pub const fn root() -> Self {
+    pub fn root() -> Self {
         Self {
             ruid: 0,
             euid: 0,
@@ -149,6 +150,7 @@ impl Credentials {
             egid: 0,
             sgid: 0,
             fsgid: 0,
+            groups: Vec::new(),
         }
     }
 }
@@ -454,6 +456,10 @@ impl ProcessControlBlock {
 
     pub fn credentials(&self) -> Credentials {
         self.inner_exclusive_access().credentials.clone()
+    }
+
+    pub fn replace_supplementary_groups(&self, groups: Vec<u32>) {
+        self.inner_exclusive_access().credentials.groups = groups;
     }
 
     pub(crate) fn expire_real_timer(

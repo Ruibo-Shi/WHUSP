@@ -58,6 +58,8 @@ const SYSCALL_RT_SIGTIMEDWAIT: usize = 137;
 const SYSCALL_RT_SIGRETURN: usize = 139;
 const SYSCALL_REBOOT: usize = 142;
 const SYSCALL_TIMES: usize = 153;
+const SYSCALL_GETGROUPS: usize = 158;
+const SYSCALL_SETGROUPS: usize = 159;
 const SYSCALL_UNAME: usize = 160;
 const SYSCALL_GETRLIMIT: usize = 163;
 const SYSCALL_SETRLIMIT: usize = 164;
@@ -317,6 +319,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_RT_SIGRETURN => sys_rt_sigreturn(),
         SYSCALL_REBOOT => sys_reboot(args[0], args[1], args[2], args[3]),
         SYSCALL_TIMES => sys_times(args[0] as *mut LinuxTms),
+        SYSCALL_GETGROUPS => sys_getgroups(args[0], args[1] as *mut u32),
+        SYSCALL_SETGROUPS => sys_setgroups(args[0], args[1] as *const u32),
         SYSCALL_UNAME => sys_uname(args[0] as *mut LinuxUtsName),
         SYSCALL_GETRLIMIT => sys_getrlimit(args[0] as i32, args[1] as *mut RLimit),
         SYSCALL_SETRLIMIT => sys_setrlimit(args[0] as i32, args[1] as *const RLimit),

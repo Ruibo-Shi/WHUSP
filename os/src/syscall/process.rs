@@ -30,6 +30,7 @@ const LINUX_REBOOT_CMD_HALT: u32 = 0xcdef_0123;
 const LINUX_REBOOT_CMD_CAD_ON: u32 = 0x89ab_cdef;
 const LINUX_REBOOT_CMD_CAD_OFF: u32 = 0x0000_0000;
 const LINUX_REBOOT_CMD_POWER_OFF: u32 = 0x4321_fedc;
+const NGROUPS_MAX: usize = 65536;
 
 struct ScriptInterpreter {
     path: String,
@@ -215,6 +216,45 @@ pub fn sys_getgid() -> isize {
 
 pub fn sys_getegid() -> isize {
     current_process().credentials().egid as isize
+}
+
+pub fn sys_getgroups(size: usize, list: *mut u32) -> SysResult {
+    let groups = current_process().credentials().groups;
+    if size == 0 {
+        return Ok(groups.len() as isize);
+    }
+    if size < groups.len() {
+        return Err(SysError::EINVAL);
+    }
+    if list.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let token = current_user_token();
+    for (index, group) in groups.iter().enumerate() {
+        write_user_value(token, list.wrapping_add(index), group)?;
+    }
+    Ok(groups.len() as isize)
+}
+
+pub fn sys_setgroups(size: usize, list: *const u32) -> SysResult {
+    if size > NGROUPS_MAX {
+        return Err(SysError::EINVAL);
+    }
+    if current_process().credentials().euid != 0 {
+        // UNFINISHED: Linux checks CAP_SETGID in the caller's user namespace.
+        // This kernel only has root-equivalent credentials for now.
+        return Err(SysError::EPERM);
+    }
+    if size > 0 && list.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let token = current_user_token();
+    let mut groups = Vec::new();
+    for index in 0..size {
+        groups.push(read_user_value(token, list.wrapping_add(index))?);
+    }
+    current_process().replace_supplementary_groups(groups);
+    Ok(0)
 }
 
 pub fn sys_set_tid_address(tidptr: usize) -> SysResult {
