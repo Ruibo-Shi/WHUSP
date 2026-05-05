@@ -201,6 +201,22 @@ pub fn sys_getppid() -> isize {
     current_process().getppid() as isize
 }
 
+pub fn sys_getuid() -> isize {
+    current_process().credentials().ruid as isize
+}
+
+pub fn sys_geteuid() -> isize {
+    current_process().credentials().euid as isize
+}
+
+pub fn sys_getgid() -> isize {
+    current_process().credentials().rgid as isize
+}
+
+pub fn sys_getegid() -> isize {
+    current_process().credentials().egid as isize
+}
+
 pub fn sys_set_tid_address(tidptr: usize) -> SysResult {
     let task = current_task().unwrap();
     let tid = task.linux_tid();

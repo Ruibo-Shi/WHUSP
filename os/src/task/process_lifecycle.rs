@@ -2,7 +2,8 @@ use super::exec::{ExecStackInfo, init_user_stack};
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
 use super::process::{
-    ProcessControlBlock, ProcessControlBlockInner, ProcessCpuTimes, ProcessResourceLimits,
+    Credentials, ProcessControlBlock, ProcessControlBlockInner, ProcessCpuTimes,
+    ProcessResourceLimits,
 };
 use super::{
     CloneArgs, CloneFlags, FdTableEntry, SignalAction, TaskControlBlock, add_task, pid_alloc,
@@ -86,6 +87,7 @@ impl ProcessControlBlock {
                             OpenFlags::WRONLY,
                         )),
                     ],
+                    credentials: Credentials::root(),
                     resource_limits: ProcessResourceLimits::new(),
                     signal_actions: [SignalAction::default(); super::SIGNAL_INFO_SLOTS],
                     cpu_times: ProcessCpuTimes::default(),
@@ -139,6 +141,7 @@ impl ProcessControlBlock {
         let memory_set = MemorySet::from_existed_user(&parent.memory_set);
         let pid = pid_alloc();
         let new_fd_table = parent.fd_table.clone();
+        let credentials = parent.credentials.clone();
         let resource_limits = parent.resource_limits;
         let cwd = parent.cwd;
         let cwd_path = parent.cwd_path.clone();
@@ -164,6 +167,7 @@ impl ProcessControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
+                    credentials,
                     resource_limits,
                     signal_actions,
                     cpu_times: ProcessCpuTimes::default(),

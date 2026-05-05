@@ -225,16 +225,29 @@ fn pid_stat_content(process: ProcessProcSnapshot) -> String {
 }
 
 fn pid_status_content(process: ProcessProcSnapshot) -> String {
+    let cred = process.credentials;
     format!(
         "Name:\t{}\n\
          State:\t{}\n\
          Pid:\t{}\n\
          PPid:\t{}\n\
-         Uid:\t0\t0\t0\t0\n\
-         Gid:\t0\t0\t0\t0\n\
+         Uid:\t{}\t{}\t{}\t{}\n\
+         Gid:\t{}\t{}\t{}\t{}\n\
          VmRSS:\t0 kB\n\
          Threads:\t{}\n",
-        process.comm, process.state, process.pid, process.ppid, process.thread_count
+        process.comm,
+        process.state,
+        process.pid,
+        process.ppid,
+        cred.ruid,
+        cred.euid,
+        cred.suid,
+        cred.fsuid,
+        cred.rgid,
+        cred.egid,
+        cred.sgid,
+        cred.fsgid,
+        process.thread_count
     )
 }
 

@@ -126,6 +126,39 @@ pub struct ProcessCpuTimesSnapshot {
     pub children_system_us: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Credentials {
+    pub ruid: u32,
+    pub euid: u32,
+    pub suid: u32,
+    pub fsuid: u32,
+    pub rgid: u32,
+    pub egid: u32,
+    pub sgid: u32,
+    pub fsgid: u32,
+}
+
+impl Credentials {
+    pub const fn root() -> Self {
+        Self {
+            ruid: 0,
+            euid: 0,
+            suid: 0,
+            fsuid: 0,
+            rgid: 0,
+            egid: 0,
+            sgid: 0,
+            fsgid: 0,
+        }
+    }
+}
+
+impl Default for Credentials {
+    fn default() -> Self {
+        Self::root()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessProcSnapshot {
     pub(crate) pid: usize,
@@ -134,6 +167,7 @@ pub(crate) struct ProcessProcSnapshot {
     pub(crate) state: char,
     pub(crate) cmdline: Vec<String>,
     pub(crate) cpu_times: ProcessCpuTimesSnapshot,
+    pub(crate) credentials: Credentials,
     pub(crate) thread_count: usize,
 }
 
@@ -236,6 +270,11 @@ pub struct ProcessControlBlockInner {
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
     pub fd_table: Vec<Option<FdTableEntry>>,
+    // UNFINISHED: Linux kernel credentials are per-thread, while POSIX
+    // user-space expects process-wide synchronization. This first contest
+    // compatibility model keeps credentials on the PCB and shares them across
+    // all threads in the process.
+    pub credentials: Credentials,
     pub resource_limits: ProcessResourceLimits,
     pub signal_actions: [SignalAction; SIGNAL_INFO_SLOTS],
     pub cpu_times: ProcessCpuTimes,
@@ -374,6 +413,7 @@ impl ProcessControlBlock {
             state,
             cmdline: inner.cmdline.clone(),
             cpu_times: inner.cpu_times.snapshot(),
+            credentials: inner.credentials.clone(),
             thread_count: inner.thread_count(),
         }
     }
@@ -410,6 +450,10 @@ impl ProcessControlBlock {
 
     pub fn cpu_times_snapshot(&self) -> ProcessCpuTimesSnapshot {
         self.inner_exclusive_access().cpu_times.snapshot()
+    }
+
+    pub fn credentials(&self) -> Credentials {
+        self.inner_exclusive_access().credentials.clone()
     }
 
     pub(crate) fn expire_real_timer(

@@ -64,6 +64,10 @@ const SYSCALL_SETRLIMIT: usize = 164;
 const SYSCALL_GETTIMEOFDAY: usize = 169;
 const SYSCALL_GETPID: usize = 172;
 const SYSCALL_GETPPID: usize = 173;
+const SYSCALL_GETUID: usize = 174;
+const SYSCALL_GETEUID: usize = 175;
+const SYSCALL_GETGID: usize = 176;
+const SYSCALL_GETEGID: usize = 177;
 const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SHMGET: usize = 194;
 const SYSCALL_SHMCTL: usize = 195;
@@ -321,6 +325,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         }
         SYSCALL_GETPID => Ok(sys_getpid()),
         SYSCALL_GETPPID => Ok(sys_getppid()),
+        SYSCALL_GETUID => Ok(sys_getuid()),
+        SYSCALL_GETEUID => Ok(sys_geteuid()),
+        SYSCALL_GETGID => Ok(sys_getgid()),
+        SYSCALL_GETEGID => Ok(sys_getegid()),
         SYSCALL_GETTID => Ok(sys_gettid()),
         SYSCALL_SHMGET => sys_shmget(args[0] as isize, args[1], args[2] as i32),
         SYSCALL_SHMCTL => sys_shmctl(args[0], args[1] as i32, args[2]),
