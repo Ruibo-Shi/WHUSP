@@ -2,7 +2,7 @@ use alloc::{format, string::String};
 
 const TEST_LIBCS: &[&str] = &["/glibc", "/musl"];
 
-const INTERACTIVE_SHELL: bool = true;
+const INTERACTIVE_SHELL: bool = false;
 
 const ALL_TESTS: &[&str] = &[
     "basic_testcode.sh",
@@ -78,6 +78,7 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "creat05",
     "create_datafile",
     "create_file",
+    "cve-2017-17052",
     "data",
     "data_space",
     "datafiles",

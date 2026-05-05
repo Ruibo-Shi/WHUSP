@@ -12,9 +12,10 @@ use super::user_ptr::{
     PATH_MAX, UserBufferAccess, copy_to_user, read_user_c_string, translated_byte_buffer_checked,
 };
 use crate::fs::{
-    File, FileStat, FileTimestamp, MountId, OpenFlags, WorkingDir, link_file_at, lookup_dir_at,
-    mkdir_at, mount_is_read_only, normalize_path, open_devfs_child, open_devfs_misc_child,
-    open_file_at, open_static_path, rename_at, rmdir_at, symlink_at, unlink_file_at,
+    File, FileStat, FileTimestamp, MountId, OpenFlags, S_IFDIR, S_IFREG, WorkingDir, link_file_at,
+    lookup_dir_at, mkdir_at, mount_is_read_only, normalize_path, open_devfs_child,
+    open_devfs_misc_child, open_file_at, open_static_path, rename_at, rmdir_at, symlink_at,
+    unlink_file_at,
 };
 use crate::mm::UserBuffer;
 use crate::task::{FdTableEntry, current_process, current_user_token};
@@ -41,21 +42,91 @@ fn path_base(dirfd: isize, path: &str) -> SysResult<WorkingDir> {
     }
 }
 
-fn check_access_mode(stat: &FileStat, mode: i32) -> SysResult<()> {
+#[derive(Clone, Copy)]
+struct AccessSubject<'a> {
+    uid: u32,
+    gid: u32,
+    groups: &'a [u32],
+}
+
+impl AccessSubject<'_> {
+    fn is_root(self) -> bool {
+        self.uid == 0
+    }
+
+    fn in_group(self, gid: u32) -> bool {
+        self.gid == gid || self.groups.iter().any(|group| *group == gid)
+    }
+}
+
+fn check_access_mode(stat: &FileStat, mode: i32, subject: AccessSubject<'_>) -> SysResult<()> {
     if mode == F_OK {
         return Ok(());
     }
 
-    // UNFINISHED: Linux access checks depend on real/effective uid, gid,
-    // supplementary groups, path-prefix search permissions, immutable bits, and
-    // ETXTBSY. This kernel currently has no full credential/capability model,
-    // so R_OK/W_OK are root-like once the target resolves, while X_OK still
-    // requires any execute bit.
     if mode & W_OK != 0 && mount_is_read_only(MountId(stat.dev as usize)) {
         return Err(SysError::EROFS);
     }
-    if mode & X_OK != 0 && stat.mode & 0o111 == 0 {
+
+    // UNFINISHED: Linux also folds capabilities, ACLs, immutable/append-only
+    // inode flags, noexec mounts, and ETXTBSY into access checks. This kernel
+    // models the common DAC mode-bit path and treats uid 0 as capability-like.
+    if subject.is_root() {
+        if mode & X_OK != 0 && stat.mode & S_IFREG == S_IFREG && stat.mode & 0o111 == 0 {
+            return Err(SysError::EACCES);
+        }
+        return Ok(());
+    }
+
+    let requested = mode as u32 & 0o7;
+    let granted = if subject.uid == stat.uid {
+        (stat.mode >> 6) & 0o7
+    } else if subject.in_group(stat.gid) {
+        (stat.mode >> 3) & 0o7
+    } else {
+        stat.mode & 0o7
+    };
+
+    if granted & requested != requested {
         return Err(SysError::EACCES);
+    }
+    Ok(())
+}
+
+fn check_access_path_prefixes(
+    dirfd: isize,
+    path: &str,
+    subject: AccessSubject<'_>,
+) -> SysResult<()> {
+    let mut components = path
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .peekable();
+    let mut prefix = if path.starts_with('/') {
+        String::from("/")
+    } else {
+        String::new()
+    };
+
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            break;
+        }
+
+        if path.starts_with('/') {
+            if prefix.len() > 1 {
+                prefix.push('/');
+            }
+        } else if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(component);
+
+        let stat = resolve_stat(dirfd, prefix.as_str(), true)?;
+        if stat.mode & S_IFDIR != S_IFDIR {
+            return Err(SysError::ENOTDIR);
+        }
+        check_access_mode(&stat, X_OK, subject)?;
     }
     Ok(())
 }
@@ -234,9 +305,7 @@ fn do_faccessat(
     if mode & !VALID_ACCESS_MODE != 0 || flags & !valid_flags != 0 {
         return Err(SysError::EINVAL);
     }
-    // CONTEXT: AT_EACCESS is accepted as a no-op because this kernel does not
-    // yet distinguish real and effective credentials for user tasks.
-    let _use_effective_ids = flags & AT_EACCESS != 0;
+    let use_effective_ids = flags & AT_EACCESS != 0;
 
     let token = current_user_token();
     let path = read_user_c_string(token, path, PATH_MAX)?;
@@ -244,9 +313,24 @@ fn do_faccessat(
         return Err(SysError::ENOENT);
     }
 
+    let credentials = current_process().credentials();
+    let subject = if use_effective_ids {
+        AccessSubject {
+            uid: credentials.euid,
+            gid: credentials.egid,
+            groups: &credentials.groups,
+        }
+    } else {
+        AccessSubject {
+            uid: credentials.ruid,
+            gid: credentials.rgid,
+            groups: &credentials.groups,
+        }
+    };
     let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
+    check_access_path_prefixes(dirfd, path.as_str(), subject)?;
     let stat = resolve_stat(dirfd, path.as_str(), follow_final_symlink)?;
-    check_access_mode(&stat, mode)?;
+    check_access_mode(&stat, mode, subject)?;
     Ok(0)
 }
 
