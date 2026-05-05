@@ -214,7 +214,7 @@ fn pid_stat_content(process: ProcessProcSnapshot) -> String {
         process.comm,
         process.state,
         process.ppid,
-        process.pid,
+        process.pgid,
         process.pid,
         utime,
         stime,

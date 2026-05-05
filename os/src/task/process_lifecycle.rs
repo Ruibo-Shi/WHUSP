@@ -61,6 +61,7 @@ impl ProcessControlBlock {
             MemorySet::from_elf(&elf, None)
         };
         let pid_handle = pid_alloc();
+        let pid = pid_handle.0;
         let process = Arc::new(Self {
             pid: pid_handle,
             inner: unsafe {
@@ -70,6 +71,7 @@ impl ProcessControlBlock {
                     cwd: WorkingDir::root(),
                     cwd_path: "/".into(),
                     cmdline: args.clone(),
+                    pgid: pid,
                     parent: None,
                     children: Vec::new(),
                     exit_code: 0,
@@ -114,6 +116,10 @@ impl ProcessControlBlock {
             phent,
             phnum,
             interp_base,
+            uid: 0,
+            euid: 0,
+            gid: 0,
+            egid: 0,
         };
         let (stack_top, _, _) = init_user_stack(process_token, user_sp, &args, &envs, &stack_info);
         let app_trap_cx = TrapContext::app_init_context(
@@ -146,6 +152,7 @@ impl ProcessControlBlock {
         let cwd = parent.cwd;
         let cwd_path = parent.cwd_path.clone();
         let cmdline = parent.cmdline.clone();
+        let pgid = parent.pgid;
         let signal_actions = parent.signal_actions;
         let parent_task = parent.get_task(0);
         let parent_task_inner = parent_task.inner_exclusive_access();
@@ -163,6 +170,7 @@ impl ProcessControlBlock {
                     cwd,
                     cwd_path,
                     cmdline,
+                    pgid,
                     parent: Some(Arc::downgrade(&child_parent)),
                     children: Vec::new(),
                     exit_code: 0,

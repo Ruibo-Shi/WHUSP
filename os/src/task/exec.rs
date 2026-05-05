@@ -27,6 +27,10 @@ pub(super) struct ExecStackInfo {
     pub(super) phent: usize,
     pub(super) phnum: usize,
     pub(super) interp_base: usize,
+    pub(super) uid: u32,
+    pub(super) euid: u32,
+    pub(super) gid: u32,
+    pub(super) egid: u32,
 }
 
 fn align_down(value: usize, align: usize) -> usize {
@@ -88,10 +92,10 @@ pub(super) fn init_user_stack(
         (AT_ENTRY, stack_info.at_entry),
         (AT_BASE, stack_info.interp_base),
         (AT_FLAGS, 0),
-        (AT_UID, 0),
-        (AT_EUID, 0),
-        (AT_GID, 0),
-        (AT_EGID, 0),
+        (AT_UID, stack_info.uid as usize),
+        (AT_EUID, stack_info.euid as usize),
+        (AT_GID, stack_info.gid as usize),
+        (AT_EGID, stack_info.egid as usize),
         (AT_SECURE, 0),
         (AT_RANDOM, random_addr),
     ];
@@ -155,6 +159,10 @@ impl ProcessControlBlock {
             phent,
             phnum,
             interp_base,
+            uid: self.credentials().ruid,
+            euid: self.credentials().euid,
+            gid: self.credentials().rgid,
+            egid: self.credentials().egid,
         };
         let new_token = memory_set.token();
 

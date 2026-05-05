@@ -59,7 +59,19 @@ const SYSCALL_RT_SIGPROCMASK: usize = 135;
 const SYSCALL_RT_SIGTIMEDWAIT: usize = 137;
 const SYSCALL_RT_SIGRETURN: usize = 139;
 const SYSCALL_REBOOT: usize = 142;
+const SYSCALL_SETREGID: usize = 143;
+const SYSCALL_SETGID: usize = 144;
+const SYSCALL_SETREUID: usize = 145;
+const SYSCALL_SETUID: usize = 146;
+const SYSCALL_SETRESUID: usize = 147;
+const SYSCALL_GETRESUID: usize = 148;
+const SYSCALL_SETRESGID: usize = 149;
+const SYSCALL_GETRESGID: usize = 150;
+const SYSCALL_SETFSUID: usize = 151;
+const SYSCALL_SETFSGID: usize = 152;
 const SYSCALL_TIMES: usize = 153;
+const SYSCALL_SETPGID: usize = 154;
+const SYSCALL_GETPGID: usize = 155;
 const SYSCALL_GETGROUPS: usize = 158;
 const SYSCALL_SETGROUPS: usize = 159;
 const SYSCALL_UNAME: usize = 160;
@@ -328,7 +340,27 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_RT_SIGRETURN => sys_rt_sigreturn(),
         SYSCALL_REBOOT => sys_reboot(args[0], args[1], args[2], args[3]),
+        SYSCALL_SETREGID => sys_setregid(args[0] as i32, args[1] as i32),
+        SYSCALL_SETGID => sys_setgid(args[0] as u32),
+        SYSCALL_SETREUID => sys_setreuid(args[0] as i32, args[1] as i32),
+        SYSCALL_SETUID => sys_setuid(args[0] as u32),
+        SYSCALL_SETRESUID => sys_setresuid(args[0] as i32, args[1] as i32, args[2] as i32),
+        SYSCALL_GETRESUID => sys_getresuid(
+            args[0] as *mut u32,
+            args[1] as *mut u32,
+            args[2] as *mut u32,
+        ),
+        SYSCALL_SETRESGID => sys_setresgid(args[0] as i32, args[1] as i32, args[2] as i32),
+        SYSCALL_GETRESGID => sys_getresgid(
+            args[0] as *mut u32,
+            args[1] as *mut u32,
+            args[2] as *mut u32,
+        ),
+        SYSCALL_SETFSUID => sys_setfsuid(args[0] as i32),
+        SYSCALL_SETFSGID => sys_setfsgid(args[0] as i32),
         SYSCALL_TIMES => sys_times(args[0] as *mut LinuxTms),
+        SYSCALL_SETPGID => sys_setpgid(args[0] as isize, args[1] as isize),
+        SYSCALL_GETPGID => sys_getpgid(args[0] as isize),
         SYSCALL_GETGROUPS => sys_getgroups(args[0], args[1] as *mut u32),
         SYSCALL_SETGROUPS => sys_setgroups(args[0], args[1] as *const u32),
         SYSCALL_UNAME => sys_uname(args[0] as *mut LinuxUtsName),

@@ -153,6 +153,18 @@ impl Credentials {
             groups: Vec::new(),
         }
     }
+
+    pub fn is_root(&self) -> bool {
+        self.euid == 0
+    }
+
+    pub fn uid_matches_saved_set(&self, uid: u32) -> bool {
+        uid == self.ruid || uid == self.euid || uid == self.suid
+    }
+
+    pub fn gid_matches_saved_set(&self, gid: u32) -> bool {
+        gid == self.rgid || gid == self.egid || gid == self.sgid
+    }
 }
 
 impl Default for Credentials {
@@ -165,6 +177,7 @@ impl Default for Credentials {
 pub(crate) struct ProcessProcSnapshot {
     pub(crate) pid: usize,
     pub(crate) ppid: usize,
+    pub(crate) pgid: usize,
     pub(crate) comm: String,
     pub(crate) state: char,
     pub(crate) cmdline: Vec<String>,
@@ -268,6 +281,7 @@ pub struct ProcessControlBlockInner {
     pub cwd: WorkingDir,
     pub cwd_path: String,
     pub cmdline: Vec<String>,
+    pub pgid: usize,
     pub parent: Option<Weak<ProcessControlBlock>>,
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
@@ -381,6 +395,14 @@ impl ProcessControlBlock {
         self.parent_process().map_or(0, |parent| parent.getpid())
     }
 
+    pub fn process_group_id(&self) -> usize {
+        self.inner_exclusive_access().pgid
+    }
+
+    pub fn set_process_group_id(&self, pgid: usize) {
+        self.inner_exclusive_access().pgid = pgid;
+    }
+
     pub(crate) fn proc_snapshot(&self) -> ProcessProcSnapshot {
         let inner = self.inner_exclusive_access();
         let state = if inner.is_zombie {
@@ -411,6 +433,7 @@ impl ProcessControlBlock {
                 .as_ref()
                 .and_then(Weak::upgrade)
                 .map_or(0, |parent| parent.getpid()),
+            pgid: inner.pgid,
             comm,
             state,
             cmdline: inner.cmdline.clone(),
@@ -460,6 +483,11 @@ impl ProcessControlBlock {
 
     pub fn replace_supplementary_groups(&self, groups: Vec<u32>) {
         self.inner_exclusive_access().credentials.groups = groups;
+    }
+
+    pub(crate) fn mutate_credentials<R>(&self, f: impl FnOnce(&mut Credentials) -> R) -> R {
+        let mut inner = self.inner_exclusive_access();
+        f(&mut inner.credentials)
     }
 
     pub(crate) fn expire_real_timer(

@@ -202,6 +202,46 @@ pub fn sys_getppid() -> isize {
     current_process().getppid() as isize
 }
 
+pub fn sys_setpgid(pid: isize, pgid: isize) -> SysResult {
+    if pid < 0 || pgid < 0 {
+        return Err(SysError::EINVAL);
+    }
+    let current = current_process();
+    let target_pid = if pid == 0 {
+        current.getpid()
+    } else {
+        pid as usize
+    };
+    let target = if target_pid == current.getpid() {
+        current
+    } else {
+        pid2process(target_pid).ok_or(SysError::ESRCH)?
+    };
+    let new_pgid = if pgid == 0 {
+        target.getpid()
+    } else {
+        pgid as usize
+    };
+    // UNFINISHED: Linux setpgid enforces sessions, exec-time constraints, and
+    // parent/child relationship checks. This compatibility layer exists first
+    // to satisfy libc/LTP harness calls such as setpgid(0, 0).
+    target.set_process_group_id(new_pgid);
+    Ok(0)
+}
+
+pub fn sys_getpgid(pid: isize) -> SysResult {
+    if pid < 0 {
+        return Err(SysError::EINVAL);
+    }
+    let current = current_process();
+    let target = if pid == 0 || pid as usize == current.getpid() {
+        current
+    } else {
+        pid2process(pid as usize).ok_or(SysError::ESRCH)?
+    };
+    Ok(target.process_group_id() as isize)
+}
+
 pub fn sys_getuid() -> isize {
     current_process().credentials().ruid as isize
 }
@@ -255,6 +295,241 @@ pub fn sys_setgroups(size: usize, list: *const u32) -> SysResult {
     }
     current_process().replace_supplementary_groups(groups);
     Ok(0)
+}
+
+fn require_valid_id(id: i32) -> SysResult<Option<u32>> {
+    if id == -1 {
+        Ok(None)
+    } else if id < 0 {
+        Err(SysError::EINVAL)
+    } else {
+        Ok(Some(id as u32))
+    }
+}
+
+pub fn sys_setuid(uid: u32) -> SysResult {
+    current_process().mutate_credentials(|credentials| {
+        if credentials.is_root() {
+            credentials.ruid = uid;
+            credentials.euid = uid;
+            credentials.suid = uid;
+            credentials.fsuid = uid;
+            Ok(0)
+        } else if uid == credentials.ruid || uid == credentials.suid {
+            credentials.euid = uid;
+            credentials.fsuid = uid;
+            Ok(0)
+        } else {
+            Err(SysError::EPERM)
+        }
+    })
+}
+
+pub fn sys_setgid(gid: u32) -> SysResult {
+    current_process().mutate_credentials(|credentials| {
+        if credentials.is_root() {
+            credentials.rgid = gid;
+            credentials.egid = gid;
+            credentials.sgid = gid;
+            credentials.fsgid = gid;
+            Ok(0)
+        } else if gid == credentials.rgid || gid == credentials.sgid {
+            credentials.egid = gid;
+            credentials.fsgid = gid;
+            Ok(0)
+        } else {
+            Err(SysError::EPERM)
+        }
+    })
+}
+
+pub fn sys_setreuid(ruid: i32, euid: i32) -> SysResult {
+    let ruid = require_valid_id(ruid)?;
+    let euid = require_valid_id(euid)?;
+    current_process().mutate_credentials(|credentials| {
+        let old_ruid = credentials.ruid;
+        let old_euid = credentials.euid;
+        let old_suid = credentials.suid;
+        if !credentials.is_root() {
+            if let Some(ruid) = ruid
+                && ruid != old_ruid
+                && ruid != old_euid
+            {
+                return Err(SysError::EPERM);
+            }
+            if let Some(euid) = euid
+                && euid != old_ruid
+                && euid != old_euid
+                && euid != old_suid
+            {
+                return Err(SysError::EPERM);
+            }
+        }
+        if let Some(ruid) = ruid {
+            credentials.ruid = ruid;
+        }
+        if let Some(euid) = euid {
+            credentials.euid = euid;
+            credentials.fsuid = euid;
+        }
+        if ruid.is_some() || euid.is_some_and(|euid| euid != old_ruid) {
+            credentials.suid = credentials.euid;
+        }
+        Ok(0)
+    })
+}
+
+pub fn sys_setregid(rgid: i32, egid: i32) -> SysResult {
+    let rgid = require_valid_id(rgid)?;
+    let egid = require_valid_id(egid)?;
+    current_process().mutate_credentials(|credentials| {
+        let old_rgid = credentials.rgid;
+        let old_egid = credentials.egid;
+        let old_sgid = credentials.sgid;
+        if !credentials.is_root() {
+            if let Some(rgid) = rgid
+                && rgid != old_rgid
+                && rgid != old_egid
+                && rgid != old_sgid
+            {
+                return Err(SysError::EPERM);
+            }
+            if let Some(egid) = egid
+                && egid != old_rgid
+                && egid != old_egid
+                && egid != old_sgid
+            {
+                return Err(SysError::EPERM);
+            }
+        }
+        if let Some(rgid) = rgid {
+            credentials.rgid = rgid;
+        }
+        if let Some(egid) = egid {
+            credentials.egid = egid;
+            credentials.fsgid = egid;
+        }
+        if rgid.is_some() || egid.is_some_and(|egid| egid != old_rgid) {
+            credentials.sgid = credentials.egid;
+        }
+        Ok(0)
+    })
+}
+
+pub fn sys_setresuid(ruid: i32, euid: i32, suid: i32) -> SysResult {
+    let ruid = require_valid_id(ruid)?;
+    let euid = require_valid_id(euid)?;
+    let suid = require_valid_id(suid)?;
+    current_process().mutate_credentials(|credentials| {
+        if !credentials.is_root() {
+            for uid in [ruid, euid, suid].into_iter().flatten() {
+                if !credentials.uid_matches_saved_set(uid) {
+                    return Err(SysError::EPERM);
+                }
+            }
+        }
+        if let Some(ruid) = ruid {
+            credentials.ruid = ruid;
+        }
+        if let Some(euid) = euid {
+            credentials.euid = euid;
+        }
+        if let Some(suid) = suid {
+            credentials.suid = suid;
+        }
+        credentials.fsuid = credentials.euid;
+        Ok(0)
+    })
+}
+
+pub fn sys_setresgid(rgid: i32, egid: i32, sgid: i32) -> SysResult {
+    let rgid = require_valid_id(rgid)?;
+    let egid = require_valid_id(egid)?;
+    let sgid = require_valid_id(sgid)?;
+    current_process().mutate_credentials(|credentials| {
+        if !credentials.is_root() {
+            for gid in [rgid, egid, sgid].into_iter().flatten() {
+                if !credentials.gid_matches_saved_set(gid) {
+                    return Err(SysError::EPERM);
+                }
+            }
+        }
+        if let Some(rgid) = rgid {
+            credentials.rgid = rgid;
+        }
+        if let Some(egid) = egid {
+            credentials.egid = egid;
+        }
+        if let Some(sgid) = sgid {
+            credentials.sgid = sgid;
+        }
+        credentials.fsgid = credentials.egid;
+        Ok(0)
+    })
+}
+
+pub fn sys_getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> SysResult {
+    let credentials = current_process().credentials();
+    let token = current_user_token();
+    if !ruid.is_null() {
+        write_user_value(token, ruid, &credentials.ruid)?;
+    }
+    if !euid.is_null() {
+        write_user_value(token, euid, &credentials.euid)?;
+    }
+    if !suid.is_null() {
+        write_user_value(token, suid, &credentials.suid)?;
+    }
+    Ok(0)
+}
+
+pub fn sys_getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> SysResult {
+    let credentials = current_process().credentials();
+    let token = current_user_token();
+    if !rgid.is_null() {
+        write_user_value(token, rgid, &credentials.rgid)?;
+    }
+    if !egid.is_null() {
+        write_user_value(token, egid, &credentials.egid)?;
+    }
+    if !sgid.is_null() {
+        write_user_value(token, sgid, &credentials.sgid)?;
+    }
+    Ok(0)
+}
+
+pub fn sys_setfsuid(uid: i32) -> SysResult {
+    let uid = require_valid_id(uid)?;
+    Ok(current_process().mutate_credentials(|credentials| {
+        let old_fsuid = credentials.fsuid;
+        if let Some(uid) = uid
+            && (credentials.is_root()
+                || uid == credentials.ruid
+                || uid == credentials.euid
+                || uid == credentials.suid
+                || uid == credentials.fsuid)
+        {
+            credentials.fsuid = uid;
+        }
+        old_fsuid as isize
+    }))
+}
+
+pub fn sys_setfsgid(gid: i32) -> SysResult {
+    let gid = require_valid_id(gid)?;
+    Ok(current_process().mutate_credentials(|credentials| {
+        let old_fsgid = credentials.fsgid;
+        if let Some(gid) = gid
+            && (credentials.is_root()
+                || gid == credentials.rgid
+                || gid == credentials.egid
+                || gid == credentials.sgid
+                || gid == credentials.fsgid)
+        {
+            credentials.fsgid = gid;
+        }
+        old_fsgid as isize
+    }))
 }
 
 pub fn sys_set_tid_address(tidptr: usize) -> SysResult {
