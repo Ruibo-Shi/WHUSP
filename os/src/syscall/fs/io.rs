@@ -61,6 +61,19 @@ fn checked_position_offset(offset: usize) -> SysResult<usize> {
     }
 }
 
+fn checked_position_offset_pair(pos_l: usize, pos_h: usize) -> SysResult<usize> {
+    let offset = if pos_h == 0 {
+        pos_l
+    } else {
+        let combined = ((pos_h as u128) << 32) | ((pos_l as u32) as u128);
+        if combined > usize::MAX as u128 {
+            return Err(SysError::EINVAL);
+        }
+        combined as usize
+    };
+    checked_position_offset(offset)
+}
+
 fn ensure_positioned_target(file: &(dyn File + Send + Sync)) -> SysResult<()> {
     let mode = file.stat()?.mode;
     if mode & S_IFDIR == S_IFDIR {
@@ -148,6 +161,118 @@ pub fn sys_pwrite64(fd: usize, buf: *const u8, len: usize, offset: usize) -> Sys
         total_written += written;
         if written < slice.len() {
             break;
+        }
+    }
+    Ok(total_written as isize)
+}
+
+pub fn sys_preadv(
+    fd: usize,
+    iov: *const LinuxIovec,
+    iovcnt: usize,
+    pos_l: usize,
+    pos_h: usize,
+) -> SysResult {
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    if iovcnt > IOV_MAX {
+        return Err(SysError::EINVAL);
+    }
+    if iov.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let mut offset = checked_position_offset_pair(pos_l, pos_h)?;
+    let token = current_user_token();
+    let iovecs = read_user_iovecs(token, iov, iovcnt)?;
+    let file = get_file_by_fd(fd)?;
+    if !file.readable() {
+        return Err(SysError::EBADF);
+    }
+    ensure_positioned_target(file.as_ref())?;
+
+    for iovec in iovecs.iter() {
+        if iovec.len == 0 {
+            continue;
+        }
+        translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Write,
+        )?;
+    }
+
+    let mut total_read = 0usize;
+    for iovec in iovecs {
+        if iovec.len == 0 {
+            continue;
+        }
+        let buffers = translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Write,
+        )?;
+        for slice in buffers {
+            let read = file.read_at(offset, slice);
+            total_read += read;
+            offset = offset.checked_add(read).ok_or(SysError::EINVAL)?;
+            if read < slice.len() {
+                return Ok(total_read as isize);
+            }
+        }
+    }
+    Ok(total_read as isize)
+}
+
+pub fn sys_pwritev(
+    fd: usize,
+    iov: *const LinuxIovec,
+    iovcnt: usize,
+    pos_l: usize,
+    pos_h: usize,
+) -> SysResult {
+    if iovcnt == 0 {
+        return Ok(0);
+    }
+    if iovcnt > IOV_MAX {
+        return Err(SysError::EINVAL);
+    }
+    if iov.is_null() {
+        return Err(SysError::EFAULT);
+    }
+    let mut offset = checked_position_offset_pair(pos_l, pos_h)?;
+    let token = current_user_token();
+    let iovecs = read_user_iovecs(token, iov, iovcnt)?;
+    let file = get_file_by_fd(fd)?;
+    if !file.writable() {
+        return Err(SysError::EBADF);
+    }
+    ensure_positioned_target(file.as_ref())?;
+    // UNFINISHED: See sys_pwrite64 for the Linux O_APPEND quirk.
+    let mut total_written = 0usize;
+    for iovec in iovecs {
+        if iovec.len == 0 {
+            continue;
+        }
+        let buffers = match translated_byte_buffer_checked(
+            token,
+            iovec.base as *const u8,
+            iovec.len,
+            UserBufferAccess::Read,
+        ) {
+            Ok(buffers) => buffers,
+            Err(_) if total_written > 0 => return Ok(total_written as isize),
+            Err(err) => return Err(err),
+        };
+        for slice in buffers {
+            let written = file.write_at(offset, slice);
+            total_written += written;
+            offset = offset.checked_add(written).ok_or(SysError::EINVAL)?;
+            if written < slice.len() {
+                return Ok(total_written as isize);
+            }
         }
     }
     Ok(total_written as isize)
