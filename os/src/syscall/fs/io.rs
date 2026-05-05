@@ -1,4 +1,4 @@
-use crate::fs::{OpenFlags, PollEvents, S_IFDIR, S_IFREG, SeekWhence};
+use crate::fs::{File, OpenFlags, PollEvents, S_IFDIR, S_IFREG, SeekWhence};
 use crate::mm::{UserBuffer, translated_byte_buffer};
 use crate::task::{FdTableEntry, current_user_token};
 use alloc::vec::Vec;
@@ -53,6 +53,25 @@ fn write_with_status_flags(entry: &FdTableEntry, buf: UserBuffer) -> usize {
     }
 }
 
+fn checked_position_offset(offset: usize) -> SysResult<usize> {
+    if offset > isize::MAX as usize {
+        Err(SysError::EINVAL)
+    } else {
+        Ok(offset)
+    }
+}
+
+fn ensure_positioned_target(file: &(dyn File + Send + Sync)) -> SysResult<()> {
+    let mode = file.stat()?.mode;
+    if mode & S_IFDIR == S_IFDIR {
+        return Err(SysError::EISDIR);
+    }
+    if mode & S_IFREG != S_IFREG {
+        return Err(SysError::ESPIPE);
+    }
+    Ok(())
+}
+
 pub fn sys_lseek(fd: usize, offset: i64, whence: usize) -> SysResult {
     let whence = match whence {
         0 => SeekWhence::Set,
@@ -83,6 +102,55 @@ pub fn sys_ftruncate(fd: usize, len: usize) -> SysResult {
     }
     file.set_len(len)?;
     Ok(0)
+}
+
+pub fn sys_pread64(fd: usize, buf: *mut u8, len: usize, offset: usize) -> SysResult {
+    let offset = checked_position_offset(offset)?;
+    let token = current_user_token();
+    let file = get_file_by_fd(fd)?;
+    if !file.readable() {
+        return Err(SysError::EBADF);
+    }
+    ensure_positioned_target(file.as_ref())?;
+    let buffers = translated_byte_buffer_checked(token, buf, len, UserBufferAccess::Write)?;
+    let mut total_read = 0usize;
+    for slice in buffers {
+        let read = file.read_at(
+            offset.checked_add(total_read).ok_or(SysError::EINVAL)?,
+            slice,
+        );
+        total_read += read;
+        if read < slice.len() {
+            break;
+        }
+    }
+    Ok(total_read as isize)
+}
+
+pub fn sys_pwrite64(fd: usize, buf: *const u8, len: usize, offset: usize) -> SysResult {
+    let offset = checked_position_offset(offset)?;
+    let token = current_user_token();
+    let file = get_file_by_fd(fd)?;
+    if !file.writable() {
+        return Err(SysError::EBADF);
+    }
+    ensure_positioned_target(file.as_ref())?;
+    // UNFINISHED: Linux's pwrite path has the historical O_APPEND quirk.
+    // The contest iozone path opens regular files without O_APPEND, so this
+    // implementation writes at the explicit offset and leaves fd offset intact.
+    let buffers = translated_byte_buffer_checked(token, buf, len, UserBufferAccess::Read)?;
+    let mut total_written = 0usize;
+    for slice in buffers {
+        let written = file.write_at(
+            offset.checked_add(total_written).ok_or(SysError::EINVAL)?,
+            slice,
+        );
+        total_written += written;
+        if written < slice.len() {
+            break;
+        }
+    }
+    Ok(total_written as isize)
 }
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> SysResult {

@@ -9,7 +9,10 @@ mod uapi;
 pub(crate) mod user_ptr;
 
 pub use fd::{sys_close, sys_dup, sys_dup3, sys_fcntl, sys_pipe2};
-pub use io::{sys_ftruncate, sys_lseek, sys_read, sys_readv, sys_write, sys_writev};
+pub use io::{
+    sys_ftruncate, sys_lseek, sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write,
+    sys_writev,
+};
 pub use mount::{sys_mount, sys_umount2};
 pub use path::{
     sys_chdir, sys_faccessat, sys_faccessat2, sys_fchdir, sys_getcwd, sys_getdents64, sys_linkat,
