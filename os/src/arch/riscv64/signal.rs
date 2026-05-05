@@ -16,12 +16,13 @@ const SIGNAL_FRAME_MAGIC: usize = 0x5753_4947_4652_414d;
 const SIGNAL_STACK_ALIGN: usize = 16;
 const SA_NODEFER: usize = 0x4000_0000;
 const SIGINT: usize = 2;
+const SIGSEGV: usize = 11;
 const SIGALRM: usize = 14;
 const SIGCANCEL: usize = 33;
 const RT_SIGRETURN_TRAMPOLINE: [u32; 2] = [0x08b0_0893, 0x0000_0073];
 
 pub fn can_deliver_user_signal(signum: usize) -> bool {
-    matches!(signum, SIGINT | SIGALRM | SIGCANCEL) || signum == SIGCHLD as usize
+    matches!(signum, SIGINT | SIGSEGV | SIGALRM | SIGCANCEL) || signum == SIGCHLD as usize
 }
 
 #[repr(C)]
@@ -127,10 +128,10 @@ fn take_pending_user_signal() -> Option<PendingUserSignal> {
             if !can_deliver_user_signal(signum) {
                 // UNFINISHED: Full Linux signal delivery must support every
                 // user-installed handler. This stage deliberately limits signal
-                // frames to libc-test sigreturn's SIGINT, musl's pthread
-                // cancellation signal, ITIMER_REAL's SIGALRM, and BusyBox
-                // ash's SIGCHLD wait wakeup while the generic signal ABI is
-                // still being validated.
+                // frames to libc-test sigreturn's SIGINT, mmap/mprotect
+                // SIGSEGV handlers, musl's pthread cancellation signal,
+                // ITIMER_REAL's SIGALRM, and BusyBox ash's SIGCHLD wait
+                // wakeup while the generic signal ABI is still being validated.
                 continue;
             }
             selected = Some((signum, signal));
