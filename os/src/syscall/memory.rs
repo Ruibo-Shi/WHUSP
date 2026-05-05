@@ -1,4 +1,5 @@
 use crate::config::PAGE_SIZE;
+use crate::mm::shm::ShmError;
 use crate::mm::{MapPermission, MemoryProtectError};
 use crate::task::current_process;
 
@@ -35,6 +36,12 @@ pub fn sys_brk(addr: usize) -> SysResult {
     let process = current_process();
     let mut inner = process.inner_exclusive_access();
     Ok(inner.memory_set.set_program_break(addr) as isize)
+}
+
+pub fn sys_shmget(key: isize, size: usize, shmflg: i32) -> SysResult {
+    crate::mm::shm::shmget_segment(key, size, shmflg, current_process().getpid())
+        .map(|shmid| shmid as isize)
+        .map_err(shm_error_to_sys_error)
 }
 
 pub fn sys_mmap(
@@ -207,4 +214,14 @@ fn prot_to_map_permission(prot: usize) -> MapPermission {
         permission |= MapPermission::X;
     }
     permission
+}
+
+fn shm_error_to_sys_error(error: ShmError) -> SysError {
+    match error {
+        ShmError::NotFound => SysError::ENOENT,
+        ShmError::Exists => SysError::EEXIST,
+        ShmError::Invalid => SysError::EINVAL,
+        ShmError::NoMem => SysError::ENOMEM,
+        ShmError::Access => SysError::EACCES,
+    }
 }
