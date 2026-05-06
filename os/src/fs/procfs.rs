@@ -14,9 +14,10 @@ const ROOT_INO: u32 = 2;
 const MOUNTS_INO: u32 = 3;
 const MEMINFO_INO: u32 = 4;
 const UPTIME_INO: u32 = 5;
-const SYS_DIR_INO: u32 = 6;
-const SYS_KERNEL_DIR_INO: u32 = 7;
-const PID_MAX_INO: u32 = 8;
+const CPUINFO_INO: u32 = 6;
+const SYS_DIR_INO: u32 = 7;
+const SYS_KERNEL_DIR_INO: u32 = 8;
+const PID_MAX_INO: u32 = 9;
 const PID_DIR_BASE: u32 = 100;
 const PID_FILE_BASE: u32 = 10_000;
 const PID_FILE_STRIDE: u32 = 10;
@@ -32,6 +33,7 @@ enum ProcNode {
     Mounts,
     Meminfo,
     Uptime,
+    Cpuinfo,
     SysDir,
     SysKernelDir,
     PidMax,
@@ -72,6 +74,7 @@ fn decode_node(ino: u32) -> Option<ProcNode> {
         MOUNTS_INO => Some(ProcNode::Mounts),
         MEMINFO_INO => Some(ProcNode::Meminfo),
         UPTIME_INO => Some(ProcNode::Uptime),
+        CPUINFO_INO => Some(ProcNode::Cpuinfo),
         SYS_DIR_INO => Some(ProcNode::SysDir),
         SYS_KERNEL_DIR_INO => Some(ProcNode::SysKernelDir),
         PID_MAX_INO => Some(ProcNode::PidMax),
@@ -131,6 +134,11 @@ fn root_entries() -> Vec<RawDirEntry> {
     entries.push(RawDirEntry {
         ino: UPTIME_INO,
         name: "uptime".into(),
+        dtype: DT_REG,
+    });
+    entries.push(RawDirEntry {
+        ino: CPUINFO_INO,
+        name: "cpuinfo".into(),
         dtype: DT_REG,
     });
     entries.push(RawDirEntry {
@@ -254,6 +262,26 @@ fn uptime_content() -> String {
     format!("{seconds}.{hundredths:02} 0.00\n")
 }
 
+fn cpuinfo_content() -> String {
+    // UNFINISHED: Linux /proc/cpuinfo is architecture-specific and exposes
+    // detailed per-hart CPU features. This minimal node only provides stable
+    // virtual CPU identification for LTP and libc environment probes.
+    let (architecture, isa, mmu) = if cfg!(target_arch = "loongarch64") {
+        ("loongarch64", "la64", "pg")
+    } else {
+        ("riscv64", "rv64imafdcsu", "sv39")
+    };
+    format!(
+        "processor\t: 0\n\
+         hart\t\t: 0\n\
+         vendor_id\t: WHUSP\n\
+         model name\t: QEMU Virtual CPU\n\
+         architecture\t: {architecture}\n\
+         isa\t\t: {isa}\n\
+         mmu\t\t: {mmu}\n\n"
+    )
+}
+
 fn pid_max_content() -> String {
     // CONTEXT: LTP uses this procfs knob only to choose an unused PID for
     // negative syscall tests. The allocator is much smaller than Linux's
@@ -329,6 +357,7 @@ fn node_content(node: ProcNode) -> FsResult<Vec<u8>> {
         ProcNode::Mounts => Ok(mounts_content().into_bytes()),
         ProcNode::Meminfo => Ok(meminfo_content().into_bytes()),
         ProcNode::Uptime => Ok(uptime_content().into_bytes()),
+        ProcNode::Cpuinfo => Ok(cpuinfo_content().into_bytes()),
         ProcNode::PidMax => Ok(pid_max_content().into_bytes()),
         ProcNode::PidStat(pid) => lookup_process(pid)
             .map(pid_stat_content)
@@ -378,6 +407,7 @@ impl FileSystemBackend for ProcFs {
                 "mounts" => Ok((MOUNTS_INO, FsNodeKind::RegularFile)),
                 "meminfo" => Ok((MEMINFO_INO, FsNodeKind::RegularFile)),
                 "uptime" => Ok((UPTIME_INO, FsNodeKind::RegularFile)),
+                "cpuinfo" => Ok((CPUINFO_INO, FsNodeKind::RegularFile)),
                 "sys" => Ok((SYS_DIR_INO, FsNodeKind::Directory)),
                 "self" => {
                     let pid = crate::task::current_process().getpid();
