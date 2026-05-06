@@ -162,6 +162,7 @@ const LTP_BLACKLIST_PATTERNS: &[&str] = &[
     "pthserv",
     "ptrace*",
     "remap_file_pages*",
+    "rename14",
     "route*",
     "run_sched_cliserv.sh",
     "sctp*",

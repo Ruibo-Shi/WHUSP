@@ -19,11 +19,15 @@ const SIGINT: usize = 2;
 const SIGUSR1: usize = 10;
 const SIGSEGV: usize = 11;
 const SIGALRM: usize = 14;
+const SIGTERM: usize = 15;
 const SIGCANCEL: usize = 33;
 const RT_SIGRETURN_TRAMPOLINE: [u32; 2] = [0x08b0_0893, 0x0000_0073];
 
 pub fn can_deliver_user_signal(signum: usize) -> bool {
-    matches!(signum, SIGINT | SIGUSR1 | SIGSEGV | SIGALRM | SIGCANCEL) || signum == SIGCHLD as usize
+    matches!(
+        signum,
+        SIGINT | SIGUSR1 | SIGSEGV | SIGALRM | SIGTERM | SIGCANCEL
+    ) || signum == SIGCHLD as usize
 }
 
 #[repr(C)]
@@ -130,9 +134,9 @@ fn take_pending_user_signal() -> Option<PendingUserSignal> {
                 // UNFINISHED: Full Linux signal delivery must support every
                 // user-installed handler. This stage deliberately limits signal
                 // frames to libc-test sigreturn's SIGINT, parent/child
-                // rendezvous SIGUSR1, mmap/mprotect SIGSEGV handlers, musl's
-                // pthread cancellation signal, ITIMER_REAL's SIGALRM, and
-                // BusyBox ash's SIGCHLD wait
+                // rendezvous SIGUSR1, mmap/mprotect SIGSEGV handlers,
+                // ITIMER_REAL's SIGALRM, user cleanup SIGTERM handlers, musl's
+                // pthread cancellation signal, and BusyBox ash's SIGCHLD wait
                 // wakeup while the generic signal ABI is still being validated.
                 continue;
             }
