@@ -91,6 +91,7 @@ impl ProcessControlBlock {
                     ],
                     credentials: Credentials::root(),
                     resource_limits: ProcessResourceLimits::new(),
+                    membarrier_private_expedited_registered: false,
                     signal_actions: [SignalAction::default(); super::SIGNAL_INFO_SLOTS],
                     cpu_times: ProcessCpuTimes::default(),
                     real_timer: Default::default(),
@@ -149,6 +150,8 @@ impl ProcessControlBlock {
         let new_fd_table = parent.fd_table.clone();
         let credentials = parent.credentials.clone();
         let resource_limits = parent.resource_limits;
+        let membarrier_private_expedited_registered =
+            parent.membarrier_private_expedited_registered;
         let cwd = parent.cwd;
         let cwd_path = parent.cwd_path.clone();
         let cmdline = parent.cmdline.clone();
@@ -177,6 +180,7 @@ impl ProcessControlBlock {
                     fd_table: new_fd_table,
                     credentials,
                     resource_limits,
+                    membarrier_private_expedited_registered,
                     signal_actions,
                     cpu_times: ProcessCpuTimes::default(),
                     real_timer: Default::default(),

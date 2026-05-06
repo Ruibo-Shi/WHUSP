@@ -27,7 +27,7 @@ const TEST_SCRIPTS: &[&str] = &[
     // perfect
     // "lua_testcode.sh",
     // runnable
-    // "libctest_testcode.sh",
+    "libctest_testcode.sh",
     // runnable
     // "iozone_testcode.sh",
     // runnable
@@ -40,7 +40,7 @@ const TEST_SCRIPTS: &[&str] = &[
     // "netperf_testcode.sh",
     // runnable
     // "cyclictest_testcode.sh",
-    "ltp_testcode.sh",
+    // "ltp_testcode.sh",
 ];
 
 const LTP_BLACKLIST_PATTERNS: &[&str] = &[

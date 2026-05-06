@@ -2,6 +2,7 @@ use crate::config::PAGE_SIZE;
 use crate::mm::shm::ShmError;
 use crate::mm::{MapPermission, MemoryProtectError};
 use crate::task::current_process;
+use core::sync::atomic::{Ordering, fence};
 
 use super::errno::{SysError, SysResult};
 
@@ -31,6 +32,12 @@ const MAP_SUPPORTED: usize = MAP_SHARED
     | MAP_NORESERVE
     | MAP_STACK;
 const MAP_TYPE_MASK: usize = 0x03;
+
+const MEMBARRIER_CMD_QUERY: i32 = 0;
+const MEMBARRIER_CMD_PRIVATE_EXPEDITED: i32 = 1 << 3;
+const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED: i32 = 1 << 4;
+const MEMBARRIER_SUPPORTED_CMDS: isize =
+    (MEMBARRIER_CMD_PRIVATE_EXPEDITED | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED) as isize;
 
 pub fn sys_brk(addr: usize) -> SysResult {
     let process = current_process();
@@ -251,6 +258,37 @@ pub fn sys_munmap(addr: usize, len: usize) -> SysResult {
         flush.write_back();
     }
     Ok(0)
+}
+
+pub fn sys_membarrier(cmd: i32, flags: u32, _cpu_id: i32) -> SysResult {
+    if flags != 0 {
+        return Err(SysError::EINVAL);
+    }
+
+    match cmd {
+        MEMBARRIER_CMD_QUERY => Ok(MEMBARRIER_SUPPORTED_CMDS),
+        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => {
+            current_process()
+                .inner_exclusive_access()
+                .membarrier_private_expedited_registered = true;
+            Ok(0)
+        }
+        MEMBARRIER_CMD_PRIVATE_EXPEDITED => {
+            if !current_process()
+                .inner_exclusive_access()
+                .membarrier_private_expedited_registered
+            {
+                return Err(SysError::EPERM);
+            }
+            // UNFINISHED: A real SMP kernel must force every running sibling
+            // thread through a matching memory-ordering state. The contest
+            // kernel currently runs one hart, so a full local fence is enough
+            // for the libc private-expedited compatibility path.
+            fence(Ordering::SeqCst);
+            Ok(0)
+        }
+        _ => Err(SysError::EINVAL),
+    }
 }
 
 fn prot_to_map_permission(prot: usize) -> MapPermission {
