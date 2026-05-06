@@ -1,5 +1,7 @@
 use crate::fs::PollEvents;
-use crate::task::{current_user_token, suspend_current_and_run_next};
+use crate::task::{
+    current_has_deliverable_signal, current_user_token, suspend_current_and_run_next,
+};
 use crate::timer::get_time_ms;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -103,7 +105,7 @@ pub fn sys_ppoll(
     sigmask: *const u8,
     _sigsetsize: usize,
 ) -> SysResult {
-    // UNFINISHED: ppoll currently ignores per-call signal-mask installation and EINTR wakeups.
+    // UNFINISHED: ppoll currently ignores per-call signal-mask installation.
     if !sigmask.is_null() {
         return Err(SysError::ENOSYS);
     }
@@ -123,6 +125,9 @@ pub fn sys_ppoll(
                 write_user_pollfds(token, fds, &pollfds)?;
                 return Ok(0);
             }
+        }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
         }
         suspend_current_and_run_next();
     }
@@ -222,9 +227,9 @@ pub fn sys_pselect6(
     timeout: *const LinuxTimeSpec,
     _sigmask: usize,
 ) -> SysResult {
-    // UNFINISHED: pselect6 signal-mask installation and EINTR wakeups are not
-    // implemented; the mask argument is accepted as a no-op for libc select()
-    // compatibility on the netperf path.
+    // UNFINISHED: pselect6 signal-mask installation is not implemented; the
+    // mask argument is accepted as a no-op for libc select() compatibility on
+    // the netperf path.
     if nfds > SELECT_MAX_NFDS {
         return Err(SysError::EINVAL);
     }
@@ -263,6 +268,9 @@ pub fn sys_pselect6(
             write_user_fdset(token, writefds, &write_output)?;
             write_user_fdset(token, exceptfds, &except_output)?;
             return Ok(ready as isize);
+        }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
         }
         suspend_current_and_run_next();
     }

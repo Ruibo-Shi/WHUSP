@@ -5,9 +5,9 @@ use crate::syscall::user_ptr::{
 };
 use crate::syscall::{LinuxSigInfo, errno::SysError, errno::SysResult};
 use crate::task::{
-    SIGCHLD, SIGNAL_INFO_SLOTS, SignalAction, SignalFlags, SignalInfo, current_add_signal,
-    current_process, current_task, current_trap_cx, current_user_token, flags_to_linux_sigset,
-    linux_sigset_to_flags,
+    SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP, SS_DISABLE, SignalAction, SignalFlags, SignalInfo,
+    current_add_signal, current_process, current_task, current_trap_cx, current_user_token,
+    flags_to_linux_sigset, linux_sigset_to_flags,
 };
 use crate::trap::TrapContext;
 use core::mem::{offset_of, size_of};
@@ -15,39 +15,120 @@ use core::mem::{offset_of, size_of};
 const SIGNAL_FRAME_MAGIC: usize = 0x5753_4947_4652_414d;
 const SIGNAL_STACK_ALIGN: usize = 16;
 const SA_NODEFER: usize = 0x4000_0000;
-const SIGINT: usize = 2;
-const SIGUSR1: usize = 10;
-const SIGSEGV: usize = 11;
-const SIGALRM: usize = 14;
-const SIGTERM: usize = 15;
-const SIGCANCEL: usize = 33;
+const SA_ONSTACK: usize = 0x0800_0000;
+const SA_RESTORER: usize = 0x0400_0000;
+const SA_RESETHAND: usize = 0x8000_0000;
 const RT_SIGRETURN_TRAMPOLINE: [u32; 2] = [0x08b0_0893, 0x0000_0073];
+const LINUX_SIGSET_BYTES: usize = 128;
 
 pub fn can_deliver_user_signal(signum: usize) -> bool {
-    matches!(
-        signum,
-        SIGINT | SIGUSR1 | SIGSEGV | SIGALRM | SIGTERM | SIGCANCEL
-    ) || signum == SIGCHLD as usize
+    signum > 0
+        && signum < SIGNAL_INFO_SLOTS
+        && signum != SIGKILL as usize
+        && signum != SIGSTOP as usize
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct LinuxUContextCompat {
-    // CONTEXT: musl/riscv64's pthread cancel handler reads uc_sigmask at
-    // ucontext+40 and the interrupted PC at ucontext+176.
-    prefix_until_sigmask: [u8; 40],
-    sigmask: u64,
-    prefix_until_pc: [u8; 128],
-    pc: usize,
+struct LinuxStackT {
+    sp: usize,
+    flags: i32,
+    pad: u32,
+    size: usize,
 }
 
-impl LinuxUContextCompat {
-    fn new(interrupted_pc: usize, old_mask: SignalFlags) -> Self {
+impl LinuxStackT {
+    fn disabled() -> Self {
         Self {
-            prefix_until_sigmask: [0; 40],
+            sp: 0,
+            flags: 2,
+            pad: 0,
+            size: 0,
+        }
+    }
+
+    fn current(current_sp: usize) -> Self {
+        let Some(task) = current_task() else {
+            return Self::disabled();
+        };
+        let stack = task.inner_exclusive_access().sigaltstack;
+        Self {
+            sp: stack.sp,
+            flags: stack.flags_for_sp(current_sp),
+            pad: 0,
+            size: stack.size,
+        }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct RiscvFpState {
+    f: [u64; 64],
+    fcsr: u32,
+    reserved: [u32; 3],
+}
+
+impl RiscvFpState {
+    fn new(saved_context: TrapContext) -> Self {
+        let mut f = [0; 64];
+        f[..32].copy_from_slice(&saved_context.f);
+        Self {
+            f,
+            fcsr: saved_context.fcsr,
+            reserved: [0; 3],
+        }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct RiscvMContext {
+    gregs: [usize; 32],
+    fpregs: RiscvFpState,
+}
+
+impl RiscvMContext {
+    fn new(interrupted_pc: usize, saved_context: TrapContext) -> Self {
+        let mut gregs = [0; 32];
+        gregs[0] = interrupted_pc;
+        gregs[1..].copy_from_slice(&saved_context.x[1..]);
+        Self {
+            gregs,
+            fpregs: RiscvFpState::new(saved_context),
+        }
+    }
+
+    fn restore_trap_context(self, saved_context: TrapContext) -> TrapContext {
+        let mut restored = saved_context;
+        restored.sepc = self.gregs[0];
+        restored.x[1..].copy_from_slice(&self.gregs[1..]);
+        restored.f.copy_from_slice(&self.fpregs.f[..32]);
+        restored.fcsr = self.fpregs.fcsr;
+        restored
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RiscvUContext {
+    flags: usize,
+    link: usize,
+    stack: LinuxStackT,
+    sigmask: u64,
+    sigmask_padding: [u8; LINUX_SIGSET_BYTES - size_of::<u64>()],
+    mcontext: RiscvMContext,
+}
+
+impl RiscvUContext {
+    fn new(interrupted_pc: usize, saved_context: TrapContext, old_mask: SignalFlags) -> Self {
+        Self {
+            flags: 0,
+            link: 0,
+            stack: LinuxStackT::current(saved_context.x[2]),
             sigmask: flags_to_linux_sigset(old_mask),
-            prefix_until_pc: [0; 128],
-            pc: interrupted_pc,
+            sigmask_padding: [0; LINUX_SIGSET_BYTES - size_of::<u64>()],
+            mcontext: RiscvMContext::new(interrupted_pc, saved_context),
         }
     }
 
@@ -62,12 +143,21 @@ impl LinuxUContextCompat {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct RiscvSignalFrame {
-    magic: usize,
-    trampoline: [u32; 2],
-    saved_context: TrapContext,
     siginfo: LinuxSigInfo,
-    ucontext: LinuxUContextCompat,
+    ucontext: RiscvUContext,
+    magic: usize,
+    saved_context: TrapContext,
+    trampoline: [u32; 2],
 }
+
+const _: () = {
+    assert!(offset_of!(RiscvSignalFrame, siginfo) == 0);
+    assert!(offset_of!(RiscvSignalFrame, ucontext) == 128);
+    assert!(offset_of!(RiscvUContext, sigmask) == 40);
+    assert!(offset_of!(RiscvUContext, mcontext) == 176);
+    assert!(offset_of!(RiscvMContext, gregs) == 0);
+    assert!(size_of::<LinuxSigInfo>() == 128);
+};
 
 struct PendingUserSignal {
     signum: u32,
@@ -131,13 +221,6 @@ fn take_pending_user_signal() -> Option<PendingUserSignal> {
                 continue;
             }
             if !can_deliver_user_signal(signum) {
-                // UNFINISHED: Full Linux signal delivery must support every
-                // user-installed handler. This stage deliberately limits signal
-                // frames to libc-test sigreturn's SIGINT, parent/child
-                // rendezvous SIGUSR1, mmap/mprotect SIGSEGV handlers,
-                // ITIMER_REAL's SIGALRM, user cleanup SIGTERM handlers, musl's
-                // pthread cancellation signal, and BusyBox ash's SIGCHLD wait
-                // wakeup while the generic signal ABI is still being validated.
                 continue;
             }
             selected = Some((signum, signal));
@@ -146,7 +229,14 @@ fn take_pending_user_signal() -> Option<PendingUserSignal> {
         selected?
     };
 
-    let action = process.inner_exclusive_access().signal_actions[signum];
+    let action = {
+        let mut process_inner = process.inner_exclusive_access();
+        let action = process_inner.signal_actions[signum];
+        if action.has_user_handler() && action.flags & SA_RESETHAND != 0 {
+            process_inner.signal_actions[signum] = SignalAction::default();
+        }
+        action
+    };
     if action.is_ignore() {
         remove_pending_signal(signum, signal);
         return None;
@@ -187,14 +277,14 @@ pub fn deliver_pending_signal(interrupted_pc: usize) -> bool {
         return false;
     };
     let saved_context = *current_trap_cx();
-    let user_sp = saved_context.x[2];
+    let user_sp = signal_frame_stack_top(delivery.action, saved_context.x[2]);
     let frame_sp = (user_sp - size_of::<RiscvSignalFrame>()) & !(SIGNAL_STACK_ALIGN - 1);
     let frame = RiscvSignalFrame {
-        magic: SIGNAL_FRAME_MAGIC,
-        trampoline: RT_SIGRETURN_TRAMPOLINE,
-        saved_context,
         siginfo: LinuxSigInfo::from(delivery.info),
-        ucontext: LinuxUContextCompat::new(interrupted_pc, delivery.old_mask),
+        ucontext: RiscvUContext::new(interrupted_pc, saved_context, delivery.old_mask),
+        magic: SIGNAL_FRAME_MAGIC,
+        saved_context,
+        trampoline: RT_SIGRETURN_TRAMPOLINE,
     };
     let token = current_user_token();
     if write_user_value_with_fault(
@@ -212,7 +302,16 @@ pub fn deliver_pending_signal(interrupted_pc: usize) -> bool {
     let siginfo_ptr = frame_sp + offset_of!(RiscvSignalFrame, siginfo);
     let ucontext_ptr = frame_sp + offset_of!(RiscvSignalFrame, ucontext);
     let trampoline_ptr = frame_sp + offset_of!(RiscvSignalFrame, trampoline);
-    if !make_trampoline_page_executable(trampoline_ptr) {
+    let restorer_ptr = if delivery.action.flags & SA_RESTORER != 0 && delivery.action.restorer != 0
+    {
+        delivery.action.restorer
+    } else {
+        // CONTEXT: This kernel has no RISC-V vDSO rt_sigreturn page yet, so
+        // libc actions without SA_RESTORER still need a temporary stack
+        // trampoline. Long-term this should become a fixed executable mapping.
+        trampoline_ptr
+    };
+    if restorer_ptr == trampoline_ptr && !make_trampoline_page_executable(trampoline_ptr) {
         current_add_signal(SignalFlags::SIGSEGV);
         return false;
     }
@@ -221,11 +320,28 @@ pub fn deliver_pending_signal(interrupted_pc: usize) -> bool {
     trap_cx.x = saved_context.x;
     trap_cx.sepc = delivery.action.handler;
     trap_cx.set_sp(frame_sp);
-    trap_cx.x[1] = trampoline_ptr;
+    trap_cx.x[1] = restorer_ptr;
     trap_cx.x[10] = delivery.signum as usize;
     trap_cx.x[11] = siginfo_ptr;
     trap_cx.x[12] = ucontext_ptr;
     true
+}
+
+fn signal_frame_stack_top(action: SignalAction, current_sp: usize) -> usize {
+    if action.flags & SA_ONSTACK == 0 {
+        return current_sp;
+    }
+    let Some(task) = current_task() else {
+        return current_sp;
+    };
+    let stack = task.inner_exclusive_access().sigaltstack;
+    if !stack.is_enabled() || stack.flags & SS_DISABLE != 0 || stack.contains(current_sp) {
+        current_sp
+    } else {
+        // UNFINISHED: Linux also detects altstack overflow and reports SIGSEGV
+        // when the signal frame cannot fit on the configured alternate stack.
+        stack.sp.saturating_add(stack.size)
+    }
 }
 
 pub fn sys_rt_sigreturn() -> SysResult {
@@ -243,8 +359,13 @@ pub fn sys_rt_sigreturn() -> SysResult {
     if let Some(task) = current_task() {
         task.inner_exclusive_access().signal_mask = frame.ucontext.restored_signal_mask();
     }
-    let mut restored_context = frame.saved_context;
-    restored_context.sepc = frame.ucontext.pc;
+    // UNFINISHED: Linux also validates and restores vector extension records.
+    // This first ABI-complete frame restores general registers and the saved
+    // double-precision FPU payload carried by this kernel's TrapContext.
+    let restored_context = frame
+        .ucontext
+        .mcontext
+        .restore_trap_context(frame.saved_context);
     let return_value = restored_context.x[10] as isize;
     *current_trap_cx() = restored_context;
     Ok(return_value)

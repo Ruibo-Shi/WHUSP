@@ -1,6 +1,7 @@
 use crate::task::{
     TaskControlBlock, TaskStatus, block_current_and_run_next, block_current_task_no_schedule,
-    current_process, current_task, current_user_token, schedule, wakeup_task,
+    current_has_deliverable_signal, current_process, current_task, current_user_token, schedule,
+    wakeup_task,
 };
 use crate::timer::{
     add_real_timer, add_timer, get_time_ms, get_time_us, monotonic_time_nanos, wall_time_nanos,
@@ -420,6 +421,9 @@ fn futex_wait(
         if futex_timeout_expired(timeout_ms) {
             return Err(SysError::ETIMEDOUT);
         }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
+        }
         let (blocked_task, task_cx_ptr) = block_current_task_no_schedule();
         manager
             .waiters
@@ -443,7 +447,13 @@ fn futex_wait(
         if still_waiting {
             return Err(SysError::ETIMEDOUT);
         }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
+        }
         return Ok(0);
+    }
+    if current_has_deliverable_signal() {
+        return Err(SysError::EINTR);
     }
     if still_waiting {
         return Err(SysError::EINTR);
@@ -529,6 +539,9 @@ fn futex_lock_pi(addr: usize, private: bool, timeout_ms: Option<usize>) -> SysRe
         if futex_timeout_expired(timeout_ms) {
             return Err(SysError::ETIMEDOUT);
         }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
+        }
         let word = read_futex_word(addr)?;
         if word & FUTEX_WAITERS == 0 {
             write_futex_word(addr, word | FUTEX_WAITERS)?;
@@ -561,7 +574,14 @@ fn futex_lock_pi(addr: usize, private: bool, timeout_ms: Option<usize>) -> SysRe
             clear_pi_waiters_bit_if_idle(addr, key)?;
             return Err(SysError::ETIMEDOUT);
         }
+        if current_has_deliverable_signal() {
+            return Err(SysError::EINTR);
+        }
         return Ok(0);
+    }
+    if current_has_deliverable_signal() {
+        clear_pi_waiters_bit_if_idle(addr, key)?;
+        return Err(SysError::EINTR);
     }
     if still_waiting {
         clear_pi_waiters_bit_if_idle(addr, key)?;
@@ -909,23 +929,19 @@ pub fn sys_setitimer(which: i32, value: *const u8, old_value: *mut u8) -> SysRes
     Ok(0)
 }
 
-fn sleep_until_ms(expire_ms: usize) {
+fn sleep_until_ms(expire_ms: usize) -> SysResult {
     if get_time_ms() >= expire_ms {
-        return;
+        return Ok(0);
+    }
+    if current_has_deliverable_signal() {
+        return Err(SysError::EINTR);
     }
     let task = current_task().unwrap();
     add_timer(expire_ms, task);
     block_current_and_run_next();
-}
-
-fn sleep_for_ms(duration_ms: usize) -> SysResult {
-    if duration_ms == 0 {
-        return Ok(0);
+    if get_time_ms() < expire_ms && current_has_deliverable_signal() {
+        return Err(SysError::EINTR);
     }
-    let expire_ms = get_time_ms()
-        .checked_add(duration_ms)
-        .ok_or(SysError::EINVAL)?;
-    sleep_until_ms(expire_ms);
     Ok(0)
 }
 
@@ -939,19 +955,48 @@ fn sleep_until_clock(backend: ClockBackend, request: LinuxTimeSpec) -> SysResult
     let expire_ms = get_time_ms()
         .checked_add(duration_ms)
         .ok_or(SysError::EINVAL)?;
-    sleep_until_ms(expire_ms);
+    sleep_until_ms(expire_ms)
+}
+
+fn remaining_until_timespec(expire_ms: usize) -> LinuxTimeSpec {
+    let remaining_ms = expire_ms.saturating_sub(get_time_ms());
+    let remaining_nanos = (remaining_ms as u64).saturating_mul(NSEC_PER_MSEC as u64);
+    nanos_to_timespec(remaining_nanos)
+}
+
+fn write_remaining_sleep_time(
+    token: usize,
+    rem: *mut LinuxTimeSpec,
+    expire_ms: usize,
+) -> SysResult {
+    if rem.is_null() {
+        return Ok(0);
+    }
+    let remaining = remaining_until_timespec(expire_ms);
+    write_user_value(token, rem, &remaining)?;
     Ok(0)
 }
 
-pub fn sys_nanosleep(req: *const LinuxTimeSpec, _rem: *mut LinuxTimeSpec) -> SysResult {
+pub fn sys_nanosleep(req: *const LinuxTimeSpec, rem: *mut LinuxTimeSpec) -> SysResult {
     if req.is_null() {
         return Err(SysError::EFAULT);
     }
-    let request = validate_timespec(read_user_value(current_user_token(), req)?)?;
-    // UNFINISHED: Linux nanosleep returns EINTR and writes the remaining time
-    // to rem when interrupted by a handled signal. This kernel currently lacks
-    // non-fatal signal delivery and signal-driven wakeups for sleeping tasks.
-    sleep_for_ms(timespec_to_ms_ceil(request)?)
+    let token = current_user_token();
+    let request = validate_timespec(read_user_value(token, req)?)?;
+    let duration_ms = timespec_to_ms_ceil(request)?;
+    if duration_ms == 0 {
+        return Ok(0);
+    }
+    let expire_ms = get_time_ms()
+        .checked_add(duration_ms)
+        .ok_or(SysError::EINVAL)?;
+    match sleep_until_ms(expire_ms) {
+        Err(SysError::EINTR) => {
+            write_remaining_sleep_time(token, rem, expire_ms)?;
+            Err(SysError::EINTR)
+        }
+        result => result,
+    }
 }
 
 pub fn sys_futex(
@@ -1057,7 +1102,7 @@ pub fn sys_clock_nanosleep(
     clock_id: i32,
     flags: u32,
     req: *const LinuxTimeSpec,
-    _rem: *mut LinuxTimeSpec,
+    rem: *mut LinuxTimeSpec,
 ) -> SysResult {
     if flags & !TIMER_ABSTIME != 0 {
         return Err(SysError::EINVAL);
@@ -1068,10 +1113,22 @@ pub fn sys_clock_nanosleep(
     }
 
     let request = validate_timespec(read_user_value(current_user_token(), req)?)?;
-    // UNFINISHED: Signal interruption and rem writeback are not implemented yet.
     if flags & TIMER_ABSTIME != 0 {
         sleep_until_clock(backend, request)
     } else {
-        sleep_for_ms(timespec_to_ms_ceil(request)?)
+        let duration_ms = timespec_to_ms_ceil(request)?;
+        if duration_ms == 0 {
+            return Ok(0);
+        }
+        let expire_ms = get_time_ms()
+            .checked_add(duration_ms)
+            .ok_or(SysError::EINVAL)?;
+        match sleep_until_ms(expire_ms) {
+            Err(SysError::EINTR) => {
+                write_remaining_sleep_time(current_user_token(), rem, expire_ms)?;
+                Err(SysError::EINTR)
+            }
+            result => result,
+        }
     }
 }

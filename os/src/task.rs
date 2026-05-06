@@ -38,7 +38,9 @@ pub use processor::{
     current_user_token, run_tasks, schedule, take_current_task,
 };
 pub use signal::{
-    CLD_EXITED, SIGCHLD, SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP, SignalAction, SignalFlags, SignalInfo,
+    CLD_EXITED, DefaultSignalAction, MINSIGSTKSZ, SIGCHLD, SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP,
+    SS_DISABLE, SS_ONSTACK, SigAltStack, SignalAction, SignalFlags, SignalInfo,
+    default_signal_action, default_signal_error,
 };
 pub(crate) use signal::{flags_to_linux_sigset, linux_sigset_to_flags};
 pub use task::{TaskControlBlock, TaskStatus};
@@ -387,7 +389,8 @@ pub fn check_signals_of_current() -> Option<(i32, &'static str)> {
     // installed a user handler; LTP heartbeat children can otherwise kill the
     // kernel-owned init shell with a stray SIGUSR1.
     if action.is_ignore()
-        || (signum == SIGCHLD as usize && !action.has_user_handler())
+        || (default_signal_action(signum) == Some(DefaultSignalAction::Ignore)
+            && !action.has_user_handler())
         || (Arc::ptr_eq(&process, &INITPROC) && !action.has_user_handler())
     {
         let mut task_inner = task.inner_exclusive_access();
@@ -397,7 +400,7 @@ pub fn check_signals_of_current() -> Option<(i32, &'static str)> {
     if action.has_user_handler() {
         return None;
     }
-    pending.check_error()
+    default_signal_error(signum)
 }
 
 pub fn current_has_deliverable_signal() -> bool {
@@ -421,10 +424,10 @@ pub fn current_has_deliverable_signal() -> bool {
             continue;
         }
         let action = process.inner_exclusive_access().signal_actions[signum];
-        if action.is_ignore()
-            || !action.has_user_handler()
-            || !crate::arch::signal::can_deliver_user_signal(signum)
-        {
+        if action.is_ignore() || !action.has_user_handler() {
+            continue;
+        }
+        if !crate::arch::signal::can_deliver_user_signal(signum) {
             continue;
         }
         return true;

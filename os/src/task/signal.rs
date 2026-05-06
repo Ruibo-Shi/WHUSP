@@ -3,10 +3,17 @@ use bitflags::*;
 pub const SIGNAL_INFO_SLOTS: usize = 65;
 
 pub const SI_USER: i32 = 0;
+pub const SI_TKILL: i32 = -6;
 pub const SIGKILL: u32 = 9;
 pub const SIGCHLD: u32 = 17;
 pub const SIGSTOP: u32 = 19;
+pub const SIGRTMIN: usize = 32;
+pub const SIGRT_1: usize = 33;
+pub const SIGRTMAX: usize = 64;
 pub const CLD_EXITED: i32 = 1;
+pub const SS_ONSTACK: i32 = 1;
+pub const SS_DISABLE: i32 = 2;
+pub const MINSIGSTKSZ: usize = 2048;
 
 pub(crate) fn linux_sigset_to_flags(raw: u64) -> SignalFlags {
     SignalFlags::from_bits_retain((raw as u128) << 1)
@@ -44,6 +51,7 @@ bitflags! {
 pub struct SignalAction {
     pub handler: usize,
     pub flags: usize,
+    pub restorer: usize,
     pub mask: SignalFlags,
 }
 
@@ -66,6 +74,41 @@ pub struct SignalInfo {
     pub status: i32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SigAltStack {
+    pub sp: usize,
+    pub size: usize,
+    pub flags: i32,
+}
+
+impl SigAltStack {
+    pub fn disabled() -> Self {
+        Self {
+            sp: 0,
+            size: 0,
+            flags: SS_DISABLE,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        self.flags & SS_DISABLE == 0
+    }
+
+    pub fn contains(self, sp: usize) -> bool {
+        self.is_enabled() && sp.wrapping_sub(self.sp) < self.size
+    }
+
+    pub fn flags_for_sp(self, sp: usize) -> i32 {
+        if !self.is_enabled() {
+            SS_DISABLE
+        } else if self.contains(sp) {
+            SS_ONSTACK
+        } else {
+            0
+        }
+    }
+}
+
 impl SignalInfo {
     pub fn user(signo: i32, pid: i32) -> Self {
         Self {
@@ -86,6 +129,25 @@ impl SignalInfo {
             status,
         }
     }
+
+    pub fn tkill(signo: i32, pid: i32) -> Self {
+        Self {
+            signo,
+            code: SI_TKILL,
+            pid,
+            uid: 0,
+            status: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultSignalAction {
+    Terminate,
+    Ignore,
+    Stop,
+    Continue,
+    Core,
 }
 
 impl SignalFlags {
@@ -94,6 +156,8 @@ impl SignalFlags {
             Some(Self::empty())
         } else if signum >= SIGNAL_INFO_SLOTS as u32 {
             None
+        } else if signum == SIGRT_1 as u32 {
+            Some(Self::from_bits_retain(1u128 << signum))
         } else {
             // CONTEXT: Linux real-time signals are ABI-visible even when this
             // kernel has no named per-signal semantics for them yet. musl uses
@@ -136,5 +200,30 @@ impl SignalFlags {
         } else {
             None
         }
+    }
+}
+
+pub fn default_signal_action(signum: usize) -> Option<DefaultSignalAction> {
+    use DefaultSignalAction::*;
+
+    match signum {
+        1 | 2 | 13 | 14 | 15 | 24 | 25 | 26 | 27 | 29 | 30 | 31 => Some(Terminate),
+        3 | 4 | 5 | 6 | 7 | 8 | 11 | 16 => Some(Core),
+        9 => Some(Terminate),
+        17 | 23 | 28 => Some(Ignore),
+        18 => Some(Continue),
+        19 | 20 | 21 | 22 => Some(Stop),
+        SIGRTMIN..=SIGRTMAX => Some(Terminate),
+        _ => None,
+    }
+}
+
+pub fn default_signal_error(signum: usize) -> Option<(i32, &'static str)> {
+    if default_signal_action(signum) == Some(DefaultSignalAction::Ignore) {
+        return None;
+    }
+    match signum {
+        SIGRTMIN..=SIGRTMAX => Some((-(signum as i32), "Real-time signal terminated")),
+        _ => SignalFlags::from_signum(signum as u32)?.check_error(),
     }
 }

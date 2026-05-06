@@ -1,7 +1,7 @@
 use super::id::{PidHandle, TaskUserRes};
 use super::{
-    KernelStack, ProcessControlBlock, SIGNAL_INFO_SLOTS, SignalFlags, SignalInfo, TaskContext,
-    kstack_alloc,
+    KernelStack, ProcessControlBlock, SIGNAL_INFO_SLOTS, SigAltStack, SignalFlags, SignalInfo,
+    TaskContext, kstack_alloc,
 };
 use crate::trap::TrapContext;
 use crate::{
@@ -61,6 +61,7 @@ pub struct TaskControlBlockInner {
     pub signal_infos: [Option<SignalInfo>; SIGNAL_INFO_SLOTS],
     pub signal_mask: SignalFlags,
     pub sigsuspend_restore_mask: Option<SignalFlags>,
+    pub sigaltstack: SigAltStack,
 }
 
 impl TaskControlBlockInner {
@@ -113,6 +114,7 @@ impl TaskControlBlock {
                     signal_infos: [None; SIGNAL_INFO_SLOTS],
                     signal_mask: SignalFlags::empty(),
                     sigsuspend_restore_mask: None,
+                    sigaltstack: SigAltStack::disabled(),
                 })
             },
         }

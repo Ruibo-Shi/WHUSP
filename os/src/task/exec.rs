@@ -1,4 +1,4 @@
-use super::{SignalAction, process::ProcessControlBlock};
+use super::{SigAltStack, SignalAction, process::ProcessControlBlock};
 use crate::config::PAGE_SIZE;
 use crate::mm::{ElfLoadInfo, KERNEL_SPACE, MemorySet, translated_refmut};
 use crate::trap::{TrapContext, trap_handler};
@@ -190,6 +190,7 @@ impl ProcessControlBlock {
         let mut task_inner = task.inner_exclusive_access();
         task_inner.robust_list_head = 0;
         task_inner.sigsuspend_restore_mask = None;
+        task_inner.sigaltstack = SigAltStack::disabled();
         task_inner.res.as_mut().unwrap().ustack_base = ustack_base;
         task_inner.res.as_mut().unwrap().alloc_user_res();
         task_inner.trap_cx_ppn = task_inner.res.as_mut().unwrap().trap_cx_ppn();

@@ -1,6 +1,7 @@
 use crate::task::{
-    ProcessControlBlock, SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP, SignalAction, SignalFlags,
-    SignalInfo, TaskControlBlock, current_has_deliverable_signal, current_process, current_task,
+    MINSIGSTKSZ, ProcessControlBlock, SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP, SS_DISABLE, SS_ONSTACK,
+    SigAltStack, SignalAction, SignalFlags, SignalInfo, TaskControlBlock,
+    current_has_deliverable_signal, current_process, current_task, current_trap_cx,
     current_user_token, flags_to_linux_sigset, linux_sigset_to_flags, pid2process,
     processes_snapshot, queue_signal_to_task, suspend_current_and_run_next,
 };
@@ -17,6 +18,7 @@ const LINUX_RT_SIGSET_SIZE: usize = 8;
 const SIG_BLOCK: usize = 0;
 const SIG_UNBLOCK: usize = 1;
 const SIG_SETMASK: usize = 2;
+const LINUX_SS_AUTODISARM: i32 = 1 << 31;
 
 fn read_signal_set(token: usize, set: *const u8, sigsetsize: usize) -> SysResult<SignalFlags> {
     if sigsetsize != LINUX_RT_SIGSET_SIZE {
@@ -84,7 +86,48 @@ fn try_return_pending_signal(
 struct LinuxKernelSigAction {
     handler: usize,
     flags: usize,
+    restorer: usize,
     mask: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxStackT {
+    sp: usize,
+    flags: i32,
+    pad: u32,
+    size: usize,
+}
+
+impl LinuxStackT {
+    fn from_altstack(stack: SigAltStack, current_sp: usize) -> Self {
+        Self {
+            sp: stack.sp,
+            flags: stack.flags_for_sp(current_sp),
+            pad: 0,
+            size: stack.size,
+        }
+    }
+
+    fn into_altstack(self) -> SysResult<SigAltStack> {
+        let allowed_flags = SS_DISABLE | LINUX_SS_AUTODISARM;
+        if self.flags & !allowed_flags != 0 || self.flags & SS_ONSTACK != 0 {
+            return Err(SysError::EINVAL);
+        }
+        if self.flags & SS_DISABLE != 0 {
+            return Ok(SigAltStack::disabled());
+        }
+        if self.size < MINSIGSTKSZ {
+            return Err(SysError::ENOMEM);
+        }
+        // UNFINISHED: SS_AUTODISARM is accepted for libc compatibility but this
+        // kernel does not yet clear the altstack on handler entry.
+        Ok(SigAltStack {
+            sp: self.sp,
+            size: self.size,
+            flags: self.flags & LINUX_SS_AUTODISARM,
+        })
+    }
 }
 
 impl From<SignalAction> for LinuxKernelSigAction {
@@ -92,6 +135,7 @@ impl From<SignalAction> for LinuxKernelSigAction {
         Self {
             handler: action.handler,
             flags: action.flags,
+            restorer: action.restorer,
             mask: flags_to_linux_sigset(action.mask),
         }
     }
@@ -104,6 +148,7 @@ fn signal_action_from_linux(raw: LinuxKernelSigAction) -> SignalAction {
     SignalAction {
         handler: raw.handler,
         flags: raw.flags,
+        restorer: raw.restorer,
         mask,
     }
 }
@@ -140,26 +185,30 @@ fn find_task_in_process_by_linux_tid(tgid: usize, tid: usize) -> Option<Arc<Task
     task_with_tid(&process, tid)
 }
 
-fn queue_user_signal(task: Arc<TaskControlBlock>, signum: u32, sender_pid: i32) -> SysResult<()> {
+pub fn sys_tkill(tid: isize, signum: u32) -> SysResult {
     let signal = validate_kill_signum(signum)?;
-    if signal.is_empty() {
-        return Ok(());
+    if tid < 0 {
+        return Err(SysError::EINVAL);
     }
-    queue_signal_to_task(task, signal, SignalInfo::user(signum as i32, sender_pid));
-    Ok(())
-}
-
-pub fn sys_tkill(tid: usize, signum: u32) -> SysResult {
-    let (_, task) = find_task_by_linux_tid(tid).ok_or(SysError::ESRCH)?;
-    let sender_pid = current_process().getpid() as i32;
-    queue_user_signal(task, signum, sender_pid)?;
+    let (_, task) = find_task_by_linux_tid(tid as usize).ok_or(SysError::ESRCH)?;
+    if !signal.is_empty() {
+        let sender_pid = current_process().getpid() as i32;
+        queue_signal_to_task(task, signal, SignalInfo::tkill(signum as i32, sender_pid));
+    }
     Ok(0)
 }
 
-pub fn sys_tgkill(tgid: usize, tid: usize, signum: u32) -> SysResult {
-    let task = find_task_in_process_by_linux_tid(tgid, tid).ok_or(SysError::ESRCH)?;
-    let sender_pid = current_process().getpid() as i32;
-    queue_user_signal(task, signum, sender_pid)?;
+pub fn sys_tgkill(tgid: isize, tid: isize, signum: u32) -> SysResult {
+    let signal = validate_kill_signum(signum)?;
+    if tgid < 0 || tid < 0 {
+        return Err(SysError::EINVAL);
+    }
+    let task =
+        find_task_in_process_by_linux_tid(tgid as usize, tid as usize).ok_or(SysError::ESRCH)?;
+    if !signal.is_empty() {
+        let sender_pid = current_process().getpid() as i32;
+        queue_signal_to_task(task, signal, SignalInfo::tkill(signum as i32, sender_pid));
+    }
     Ok(0)
 }
 
@@ -231,6 +280,29 @@ pub fn sys_rt_sigprocmask(
             SIG_SETMASK => task_inner.signal_mask = new_set,
             _ => return Err(SysError::EINVAL),
         }
+    }
+    Ok(0)
+}
+
+pub fn sys_sigaltstack(new_stack: *const u8, old_stack: *mut u8) -> SysResult {
+    let token = current_user_token();
+    let task = current_task().ok_or(SysError::ESRCH)?;
+    #[cfg(target_arch = "riscv64")]
+    let current_sp = current_trap_cx().x[2];
+    #[cfg(target_arch = "loongarch64")]
+    let current_sp = current_trap_cx().x[3];
+    let old = task.inner_exclusive_access().sigaltstack;
+    if !old_stack.is_null() {
+        let old_raw = LinuxStackT::from_altstack(old, current_sp);
+        write_user_value(token, old_stack.cast::<LinuxStackT>(), &old_raw)?;
+    }
+    if !new_stack.is_null() {
+        if old.contains(current_sp) {
+            return Err(SysError::EPERM);
+        }
+        let new_raw = read_user_value(token, new_stack.cast::<LinuxStackT>())?;
+        let new = new_raw.into_altstack()?;
+        task.inner_exclusive_access().sigaltstack = new;
     }
     Ok(0)
 }

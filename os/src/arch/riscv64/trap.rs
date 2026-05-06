@@ -2,7 +2,7 @@ mod context;
 
 use crate::config::TRAMPOLINE;
 use crate::mm::{MmapFaultAccess, MmapFaultResult};
-use crate::syscall::syscall;
+use crate::syscall::{errno::SysError, syscall};
 use crate::task::{
     SignalFlags, account_current_system_time_until, account_current_user_time_until,
     check_signals_of_current, current_add_signal, current_process, current_trap_cx,
@@ -70,6 +70,7 @@ pub fn trap_handler() -> ! {
     // println!("into {:?}", scause.cause());
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
+            let syscall_pc = current_trap_cx().sepc;
             // jump to next instruction anyway
             let mut cx = current_trap_cx();
             cx.sepc += 4;
@@ -83,7 +84,20 @@ pub fn trap_handler() -> ! {
             );
             // cx is changed during sys_execve, so we have to call it again
             cx = current_trap_cx();
-            interrupted_pc = cx.sepc;
+            // CONTEXT: glibc/RISC-V deferred cancellation checks whether the
+            // interrupted PC lies inside `__syscall_cancel_arch`'s ecall
+            // window. If a syscall returns EINTR because a user handler became
+            // deliverable, report the ecall PC in ucontext instead of the
+            // already-advanced return PC.
+            // UNFINISHED: SA_RESTART is not modeled yet. Interrupted syscalls
+            // such as futex, wait4, nanosleep, clock_nanosleep, ppoll, and
+            // pselect6 currently return EINTR after rt_sigreturn instead of
+            // being automatically restarted.
+            interrupted_pc = if result == -(SysError::EINTR as isize) {
+                syscall_pc
+            } else {
+                cx.sepc
+            };
             cx.x[10] = result as usize;
         }
         Trap::Exception(Exception::StorePageFault) => {

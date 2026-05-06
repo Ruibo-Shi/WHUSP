@@ -161,6 +161,7 @@ impl ProcessControlBlock {
         let parent_task_inner = parent_task.inner_exclusive_access();
         let ustack_base = parent_task_inner.res.as_ref().unwrap().ustack_base();
         let parent_signal_mask = parent_task_inner.signal_mask;
+        let parent_sigaltstack = parent_task_inner.sigaltstack;
         drop(parent_task_inner);
         drop(parent);
 
@@ -207,6 +208,7 @@ impl ProcessControlBlock {
         let trap_cx = task_inner.get_trap_cx();
         trap_cx.kernel_sp = task.kstack.get_top();
         task_inner.signal_mask = parent_signal_mask;
+        task_inner.sigaltstack = parent_sigaltstack;
         drop(task_inner);
         insert_into_pid2process(child.getpid(), Arc::clone(&child));
         add_task(task);
