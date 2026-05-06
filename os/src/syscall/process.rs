@@ -4,8 +4,8 @@ use crate::sbi::shutdown;
 use crate::task::{
     CloneArgs, CloneFlags, ProcessCpuTimesSnapshot, RLimit, RLimitResource, SignalFlags,
     SignalInfo, add_task, clone_current_thread, current_process, current_task, current_user_token,
-    exit_current_and_run_next, exit_current_group_and_run_next, pid2process, queue_signal_to_task,
-    suspend_current_and_run_next, wakeup_task,
+    exit_current_and_run_next, exit_current_group_and_run_next, pid2process, processes_snapshot,
+    queue_signal_to_task, suspend_current_and_run_next, wakeup_task,
 };
 use crate::timer::{get_time_clock_ticks, us_to_clock_ticks};
 use alloc::string::{String, ToString};
@@ -270,6 +270,22 @@ pub fn sys_getpgid(pid: isize) -> SysResult {
         pid2process(pid as usize).ok_or(SysError::ESRCH)?
     };
     Ok(target.process_group_id() as isize)
+}
+
+pub fn sys_setsid() -> SysResult {
+    let current = current_process();
+    let pid = current.getpid();
+    if processes_snapshot()
+        .iter()
+        .any(|process| process.process_group_id() == pid)
+    {
+        return Err(SysError::EPERM);
+    }
+    // UNFINISHED: This kernel does not yet store a separate session ID or
+    // controlling-terminal state. Setting PGID to PID provides the Linux-visible
+    // process-group effect needed by libc daemonization and LTP compatibility.
+    current.set_process_group_id(pid);
+    Ok(pid as isize)
 }
 
 pub fn sys_getuid() -> isize {
