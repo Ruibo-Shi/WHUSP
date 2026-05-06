@@ -15,7 +15,7 @@ use core::str;
 
 use super::errno::{SysError, SysResult};
 use super::fs::user_ptr::{
-    PATH_MAX, read_user_c_string, read_user_usize, read_user_value, write_user_value,
+    PATH_MAX, copy_to_user, read_user_c_string, read_user_usize, read_user_value, write_user_value,
 };
 
 const ELF_MAGIC: &[u8] = b"\x7fELF";
@@ -33,6 +33,11 @@ const LINUX_REBOOT_CMD_CAD_ON: u32 = 0x89ab_cdef;
 const LINUX_REBOOT_CMD_CAD_OFF: u32 = 0x0000_0000;
 const LINUX_REBOOT_CMD_POWER_OFF: u32 = 0x4321_fedc;
 const NGROUPS_MAX: usize = 65536;
+const GRND_NONBLOCK: u32 = 0x0001;
+const GRND_RANDOM: u32 = 0x0002;
+const GRND_INSECURE: u32 = 0x0004;
+const GRND_SUPPORTED: u32 = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
+const GETRANDOM_CHUNK: usize = 64;
 const LINUX_CAPABILITY_VERSION_1: u32 = 0x1998_0330;
 const LINUX_CAPABILITY_VERSION_2: u32 = 0x2007_1026;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
@@ -741,6 +746,43 @@ pub fn sys_times(tms: *mut LinuxTms) -> SysResult {
         write_user_value(current_user_token(), tms, &linux_tms)?;
     }
     Ok(clock_ticks_to_isize(get_time_clock_ticks()))
+}
+
+pub fn sys_getrandom(buf: *mut u8, len: usize, flags: u32) -> SysResult {
+    if flags & !GRND_SUPPORTED != 0 {
+        return Err(SysError::EINVAL);
+    }
+    if len == 0 {
+        return Ok(0);
+    }
+    if len > isize::MAX as usize {
+        return Err(SysError::EINVAL);
+    }
+
+    // CONTEXT: The contest kernel has no cryptographic entropy pool yet. Use a
+    // deterministic per-call generator, matching the existing /dev/urandom
+    // compatibility role well enough for libc seeding and getentropy-style
+    // small reads.
+    let token = current_user_token();
+    let mut state = (get_time_clock_ticks() as u64)
+        ^ ((current_process().getpid() as u64) << 32)
+        ^ (buf as usize as u64)
+        ^ (len as u64)
+        ^ (flags as u64);
+    let mut offset = 0usize;
+    while offset < len {
+        let chunk_len = (len - offset).min(GETRANDOM_CHUNK);
+        let mut chunk = [0u8; GETRANDOM_CHUNK];
+        for byte in &mut chunk[..chunk_len] {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(0x9e37_79b9_7f4a_7c15);
+            *byte = (state >> 32) as u8;
+        }
+        copy_to_user(token, buf.wrapping_add(offset), &chunk[..chunk_len])?;
+        offset += chunk_len;
+    }
+    Ok(len as isize)
 }
 
 fn rlimit_target_process(pid: usize) -> SysResult<Arc<crate::task::ProcessControlBlock>> {
