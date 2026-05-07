@@ -134,8 +134,8 @@ mod memory;
 mod net;
 mod process;
 mod signal;
-mod time;
-mod uapi;
+pub(crate) mod time;
+pub(crate) mod uapi;
 pub(crate) mod user_ptr;
 mod wait;
 
@@ -151,8 +151,6 @@ use time::*;
 use uapi::LinuxTimeSpec;
 use wait::*;
 
-#[cfg(any(target_arch = "riscv64", target_arch = "loongarch64"))]
-pub(crate) use futex::{clear_child_tid_and_wake, exit_robust_list, remove_process_futex_waiters};
 #[cfg(any(target_arch = "riscv64", target_arch = "loongarch64"))]
 pub(crate) use wait::LinuxSigInfo;
 

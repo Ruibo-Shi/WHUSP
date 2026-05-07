@@ -2,6 +2,7 @@ mod clone;
 mod contest_runner;
 mod exec;
 mod fd;
+pub(crate) mod futex;
 mod id;
 mod initproc;
 mod manager;
@@ -200,10 +201,10 @@ fn terminate_sibling_threads(
     }
 
     for task in robust_tasks {
-        crate::syscall::exit_robust_list(&task, process_token, process_id);
+        futex::exit_robust_list(&task, process_token, process_id);
     }
     for clear_child_tid in clear_child_tids {
-        crate::syscall::clear_child_tid_and_wake(process_token, process_id, clear_child_tid);
+        futex::clear_child_tid_and_wake(process_token, process_id, clear_child_tid);
     }
     recycle_res.clear();
     for task in exited_threads {
@@ -239,9 +240,9 @@ fn exit_current(exit_code: i32, group_exit: bool) {
         let mut task_inner = current.inner_exclusive_access();
         (task_inner.tid, task_inner.clear_child_tid.take())
     };
-    crate::syscall::exit_robust_list(&current, process_token, process_id);
+    futex::exit_robust_list(&current, process_token, process_id);
     if let Some(clear_child_tid) = clear_child_tid {
-        crate::syscall::clear_child_tid_and_wake(process_token, process_id, clear_child_tid);
+        futex::clear_child_tid_and_wake(process_token, process_id, clear_child_tid);
     }
     current.inner_exclusive_access().res = None;
 
@@ -272,7 +273,7 @@ fn exit_current(exit_code: i32, group_exit: bool) {
         }
         terminate_sibling_threads(&process, tid, process_token, process_id, exit_code);
         remove_ready_tasks_of_process(pid);
-        crate::syscall::remove_process_futex_waiters(pid);
+        futex::remove_process_futex_waiters(pid);
         remove_from_pid2process(pid);
         let (parent, children, fd_table, flushes) = {
             let mut process_inner = process.inner_exclusive_access();
