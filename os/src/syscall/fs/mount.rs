@@ -1,6 +1,6 @@
 use crate::fs::{
-    MountError, lookup_mount_target_dir_at, mount_block_device_at, mount_fat_device_at,
-    mount_tmpfs_at, normalize_path, remount_at, unmount_at,
+    MountError, lookup_mount_target_dir_in, mount_block_device_at, mount_fat_device_at,
+    mount_tmpfs_at, normalize_path_at_root, remount_at, unmount_at,
 };
 use crate::task::{current_process, current_user_token};
 
@@ -60,14 +60,18 @@ pub fn sys_mount(
     let fstype = read_user_c_string(token, fstype, PATH_MAX)?;
     let read_only = flags & MS_RDONLY != 0;
     let process = current_process();
-    let cwd = process.working_dir();
-    let cwd_path = process.working_dir_path();
-    let target_dir = lookup_mount_target_dir_at(cwd, target.as_str())?;
+    let snapshot = process.path_snapshot();
+    let target_dir = lookup_mount_target_dir_in(snapshot.context, target.as_str())?;
     if flags & MS_REMOUNT != 0 {
         remount_at(target_dir, read_only).map_err(mount_error_to_errno)?;
         return Ok(0);
     }
-    let target_path = normalize_path(&cwd_path, target.as_str()).ok_or(SysError::ENOENT)?;
+    let target_path = normalize_path_at_root(
+        snapshot.root_path.as_str(),
+        snapshot.cwd_path.as_str(),
+        target.as_str(),
+    )
+    .ok_or(SysError::ENOENT)?;
     match fstype.as_str() {
         "ext4" => {
             let source = read_user_c_string(token, source, PATH_MAX)?;
@@ -110,7 +114,8 @@ pub fn sys_umount2(target: *const u8, _flags: i32) -> SysResult {
     let token = current_user_token();
     let target = read_user_c_string(token, target, PATH_MAX)?;
     let process = current_process();
-    let target_dir = lookup_mount_target_dir_at(process.working_dir(), target.as_str())?;
+    let snapshot = process.path_snapshot();
+    let target_dir = lookup_mount_target_dir_in(snapshot.context, target.as_str())?;
     unmount_at(target_dir).map_err(mount_error_to_errno)?;
     Ok(0)
 }

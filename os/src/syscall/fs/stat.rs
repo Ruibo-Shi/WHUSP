@@ -1,12 +1,12 @@
 use crate::fs::{
-    FileStat, MountId, WorkingDir, chmod_at, chown_at, stat_at, stat_devfs_child,
-    stat_devfs_misc_child, stat_static_path, statfs_for_mount,
+    FileStat, MountId, chmod_in, chown_in, stat_devfs_child, stat_devfs_misc_child, stat_in,
+    stat_static_path, statfs_for_mount,
 };
-use crate::task::{current_process, current_user_token};
+use crate::task::{PathSnapshot, current_process, current_user_token};
 
 use super::super::errno::{SysError, SysResult};
 use super::fd::get_file_by_fd;
-use super::path::dirfd_base;
+use super::path::path_context_from;
 use super::uapi::{
     AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW, LinuxKstat, LinuxStatfs, LinuxStatx,
     STATX_RESERVED, VALID_FCHOWNAT_FLAGS, VALID_FSTATAT_FLAGS, VALID_STATX_FLAGS,
@@ -24,9 +24,9 @@ fn write_stat_result<T: From<FileStat> + Copy>(
     Ok(0)
 }
 
-fn stat_by_dirfd(dirfd: isize) -> SysResult<FileStat> {
+fn stat_by_dirfd_from(snapshot: &PathSnapshot, dirfd: isize) -> SysResult<FileStat> {
     if dirfd == AT_FDCWD {
-        return Ok(stat_at(current_process().working_dir(), ".", true)?);
+        return Ok(stat_in(snapshot.context, ".", true)?);
     }
     if dirfd < 0 {
         return Err(SysError::EBADF);
@@ -34,13 +34,14 @@ fn stat_by_dirfd(dirfd: isize) -> SysResult<FileStat> {
     Ok(get_file_by_fd(dirfd as usize)?.stat()?)
 }
 
-pub(super) fn resolve_stat(
+pub(super) fn resolve_stat_from(
+    snapshot: &PathSnapshot,
     dirfd: isize,
     path: &str,
     follow_final_symlink: bool,
 ) -> SysResult<FileStat> {
     if path.is_empty() {
-        return stat_by_dirfd(dirfd);
+        return stat_by_dirfd_from(snapshot, dirfd);
     }
     let is_absolute = path.starts_with('/');
     if !is_absolute && dirfd != AT_FDCWD && dirfd >= 0 {
@@ -54,15 +55,17 @@ pub(super) fn resolve_stat(
             return stat.ok_or(SysError::ENOENT);
         }
     }
-    if is_absolute && let Some(stat) = stat_static_path(path) {
+    if is_absolute
+        && snapshot.context.is_global_root()
+        && let Some(stat) = stat_static_path(path)
+    {
         return Ok(stat);
     }
-    let base = if is_absolute {
-        WorkingDir::root()
-    } else {
-        dirfd_base(dirfd)?
-    };
-    Ok(stat_at(base, path, follow_final_symlink)?)
+    Ok(stat_in(
+        path_context_from(snapshot, dirfd, path)?,
+        path,
+        follow_final_symlink,
+    )?)
 }
 
 pub fn sys_fstat(fd: usize, statbuf: *mut LinuxKstat) -> SysResult {
@@ -93,10 +96,11 @@ pub fn sys_newfstatat(
         return Err(SysError::ENOENT);
     }
     let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
+    let snapshot = current_process().path_snapshot();
     write_stat_result(
         token,
         statbuf,
-        resolve_stat(dirfd, path.as_str(), follow_final_symlink)?,
+        resolve_stat_from(&snapshot, dirfd, path.as_str(), follow_final_symlink)?,
     )
 }
 
@@ -131,28 +135,21 @@ pub fn sys_fchmodat(dirfd: isize, pathname: *const u8, mode: u32) -> SysResult {
     if path.is_empty() {
         return Err(SysError::ENOENT);
     }
-    let stat = resolve_stat(dirfd, path.as_str(), true)?;
+    let snapshot = current_process().path_snapshot();
+    let stat = resolve_stat_from(&snapshot, dirfd, path.as_str(), true)?;
     if !can_change_mode(stat) {
         return Err(SysError::EPERM);
     }
     // UNFINISHED: Linux clears setuid/setgid bits in additional cases depending
     // on ownership, group membership, and capabilities. The current credential
     // model is still root-compatible and does not implement those transitions.
-    chmod_at(
-        dirfd_base_for_path(dirfd, path.as_str())?,
+    chmod_in(
+        path_context_from(&snapshot, dirfd, path.as_str())?,
         path.as_str(),
         true,
         mode,
     )?;
     Ok(0)
-}
-
-fn dirfd_base_for_path(dirfd: isize, path: &str) -> SysResult<WorkingDir> {
-    if path.starts_with('/') {
-        Ok(WorkingDir::root())
-    } else {
-        dirfd_base(dirfd)
-    }
 }
 
 fn decode_chown_id(raw: u32) -> Option<u32> {
@@ -177,21 +174,16 @@ pub fn sys_fchownat(
     let token = current_user_token();
     let path = read_user_c_string(token, pathname, PATH_MAX)?;
     let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
+    let snapshot = current_process().path_snapshot();
 
     if path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
             return Err(SysError::ENOENT);
         }
         if dirfd == AT_FDCWD {
-            let stat = stat_at(current_process().working_dir(), ".", follow_final_symlink)?;
+            let stat = stat_in(snapshot.context, ".", follow_final_symlink)?;
             ensure_can_change_owner(stat, uid, gid)?;
-            chown_at(
-                current_process().working_dir(),
-                ".",
-                follow_final_symlink,
-                uid,
-                gid,
-            )?;
+            chown_in(snapshot.context, ".", follow_final_symlink, uid, gid)?;
             return Ok(0);
         }
         if dirfd < 0 {
@@ -203,10 +195,10 @@ pub fn sys_fchownat(
         return Ok(0);
     }
 
-    let stat = resolve_stat(dirfd, path.as_str(), follow_final_symlink)?;
+    let stat = resolve_stat_from(&snapshot, dirfd, path.as_str(), follow_final_symlink)?;
     ensure_can_change_owner(stat, uid, gid)?;
-    chown_at(
-        dirfd_base_for_path(dirfd, path.as_str())?,
+    chown_in(
+        path_context_from(&snapshot, dirfd, path.as_str())?,
         path.as_str(),
         follow_final_symlink,
         uid,
@@ -224,7 +216,8 @@ pub fn sys_statfs(pathname: *const u8, statfsbuf: *mut LinuxStatfs) -> SysResult
     if path.is_empty() {
         return Err(SysError::ENOENT);
     }
-    let stat = resolve_stat(AT_FDCWD, path.as_str(), true)?;
+    let snapshot = current_process().path_snapshot();
+    let stat = resolve_stat_from(&snapshot, AT_FDCWD, path.as_str(), true)?;
     let fs_stat = statfs_for_mount(MountId(stat.dev as usize)).ok_or(SysError::ENOSYS)?;
     write_user_value(token, statfsbuf, &LinuxStatfs::from(fs_stat))?;
     Ok(0)
@@ -250,9 +243,10 @@ pub fn sys_statx(
         return Err(SysError::ENOENT);
     }
     let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
+    let snapshot = current_process().path_snapshot();
     write_stat_result(
         token,
         statxbuf,
-        resolve_stat(dirfd, path.as_str(), follow_final_symlink)?,
+        resolve_stat_from(&snapshot, dirfd, path.as_str(), follow_final_symlink)?,
     )
 }

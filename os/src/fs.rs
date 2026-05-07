@@ -201,21 +201,21 @@ pub(crate) use devfs::{
 };
 pub use inode::OpenFlags;
 pub(crate) use inode::{
-    link_file_at, lookup_mount_target_dir_at, mkdir_at, rename_at, rmdir_at, symlink_at,
-    unlink_file_at,
+    link_file_in, lookup_mount_target_dir_in, mkdir_in, rename_in, rmdir_in, symlink_in,
+    unlink_file_in,
 };
 pub(crate) use mount::{
     MountError, MountId, mount_block_device_at, mount_fat_device_at, mount_is_read_only,
     mount_tmpfs_at, remount_at, statfs_for_mount, unmount_at,
 };
-pub(crate) use path::{WorkingDir, normalize_path};
+pub(crate) use path::{PathContext, WorkingDir, normalize_path_at_root, path_inside_root};
 pub use pipe::make_pipe;
 pub(crate) use staticfs::{open_path as open_static_path, stat_path as stat_static_path};
 pub use stdio::{Stdin, Stdout};
 pub(crate) use vfs::open_file;
 pub(crate) use vfs::{
-    FileSystemStat, FsError, FsResult, chmod_at, chown_at, lookup_dir_at, open_file_at, stat_at,
-    truncate_at,
+    FileSystemStat, FsError, FsResult, chmod_in, chown_in, lookup_dir_in, lookup_dir_with_stat_in,
+    open_file_in, stat_in, truncate_in,
 };
 
 pub(self) fn align_up(value: usize, align: usize) -> usize {

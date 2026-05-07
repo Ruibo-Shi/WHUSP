@@ -68,6 +68,8 @@ impl ProcessControlBlock {
                 UPIntrFreeCell::new(ProcessControlBlockInner {
                     is_zombie: false,
                     memory_set,
+                    root: WorkingDir::root(),
+                    root_path: "/".into(),
                     cwd: WorkingDir::root(),
                     cwd_path: "/".into(),
                     cmdline: args.clone(),
@@ -152,6 +154,8 @@ impl ProcessControlBlock {
         let resource_limits = parent.resource_limits;
         let membarrier_private_expedited_registered =
             parent.membarrier_private_expedited_registered;
+        let root = parent.root;
+        let root_path = parent.root_path.clone();
         let cwd = parent.cwd;
         let cwd_path = parent.cwd_path.clone();
         let cmdline = parent.cmdline.clone();
@@ -171,6 +175,8 @@ impl ProcessControlBlock {
                 UPIntrFreeCell::new(ProcessControlBlockInner {
                     is_zombie: false,
                     memory_set,
+                    root,
+                    root_path,
                     cwd,
                     cwd_path,
                     cmdline,

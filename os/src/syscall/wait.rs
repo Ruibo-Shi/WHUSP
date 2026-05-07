@@ -1,6 +1,6 @@
 use crate::mm::translated_refmut;
 use crate::task::{
-    CLD_EXITED, SIGCHLD, SignalInfo, block_current_and_run_next, current_has_deliverable_signal,
+    CLD_EXITED, SIGCHLD, SignalInfo, block_current_and_run_next, current_has_nonrestartable_signal,
     current_process,
 };
 use alloc::sync::Arc;
@@ -154,7 +154,13 @@ pub fn sys_wait4(pid: isize, wstatus: *mut i32, options: i32, rusage: *mut RUsag
         }
         drop(inner);
         drop(process);
-        if current_has_deliverable_signal() {
+        // CONTEXT: LTP's heartbeat uses signal(2), which installs SA_RESTART
+        // on musl. Returning EINTR for that SIGUSR1 makes the harness abandon
+        // its test child and remove the temporary chroot directory underneath it.
+        // UNFINISHED: Linux still runs the user handler before transparently
+        // restarting wait4(); this kernel only suppresses EINTR for restartable
+        // handlers and delivers the pending handler when wait4() returns.
+        if current_has_nonrestartable_signal() {
             return Err(SysError::EINTR);
         }
         block_current_and_run_next();
@@ -236,7 +242,7 @@ pub fn sys_waitid(
         }
         drop(inner);
         drop(process);
-        if current_has_deliverable_signal() {
+        if current_has_nonrestartable_signal() {
             return Err(SysError::EINTR);
         }
         block_current_and_run_next();

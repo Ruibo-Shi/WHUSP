@@ -6,6 +6,12 @@ pub(crate) struct WorkingDir {
     ino: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PathContext {
+    root: WorkingDir,
+    cwd: WorkingDir,
+}
+
 impl WorkingDir {
     pub(crate) fn root() -> Self {
         let mount_id = primary_mount_id();
@@ -25,6 +31,29 @@ impl WorkingDir {
 
     pub(crate) fn ino(self) -> u32 {
         self.ino
+    }
+}
+
+impl PathContext {
+    pub(crate) fn new(root: WorkingDir, cwd: WorkingDir) -> Self {
+        Self { root, cwd }
+    }
+
+    pub(crate) fn global_root() -> Self {
+        let root = WorkingDir::root();
+        Self { root, cwd: root }
+    }
+
+    pub(crate) fn root(self) -> WorkingDir {
+        self.root
+    }
+
+    pub(crate) fn cwd(self) -> WorkingDir {
+        self.cwd
+    }
+
+    pub(crate) fn is_global_root(self) -> bool {
+        self.root == WorkingDir::root()
     }
 }
 
@@ -64,5 +93,77 @@ pub(crate) fn normalize_path(cwd_path: &str, path: &str) -> Option<alloc::string
         Some("/".into())
     } else {
         Some(alloc::format!("/{}", segments.join("/")))
+    }
+}
+
+fn collect_segments(path: &str) -> alloc::vec::Vec<&str> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect()
+}
+
+fn build_path(segments: &[&str]) -> alloc::string::String {
+    if segments.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        alloc::format!("/{}", segments.join("/"))
+    }
+}
+
+fn normalize_path_above_floor(
+    base_path: &str,
+    path: &str,
+    floor_path: &str,
+) -> Option<alloc::string::String> {
+    let floor_segments = collect_segments(floor_path);
+    let mut segments = collect_segments(base_path);
+    if segments.len() < floor_segments.len()
+        || segments[..floor_segments.len()] != floor_segments[..]
+    {
+        return normalize_path(base_path, path);
+    }
+
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            if segments.len() > floor_segments.len() {
+                segments.pop();
+            }
+        } else {
+            segments.push(segment);
+        }
+    }
+
+    Some(build_path(&segments))
+}
+
+pub(crate) fn normalize_path_at_root(
+    root_path: &str,
+    cwd_path: &str,
+    path: &str,
+) -> Option<alloc::string::String> {
+    if path.starts_with('/') {
+        normalize_path_above_floor(root_path, path, root_path)
+    } else if path_inside_root(root_path, cwd_path).is_some() {
+        normalize_path_above_floor(cwd_path, path, root_path)
+    } else {
+        normalize_path(cwd_path, path)
+    }
+}
+
+pub(crate) fn path_inside_root(root_path: &str, path: &str) -> Option<alloc::string::String> {
+    if root_path == "/" {
+        return Some(alloc::string::String::from(path));
+    }
+    if path == root_path {
+        return Some(alloc::string::String::from("/"));
+    }
+    let suffix = path.strip_prefix(root_path)?;
+    if suffix.starts_with('/') {
+        Some(alloc::string::String::from(suffix))
+    } else {
+        None
     }
 }

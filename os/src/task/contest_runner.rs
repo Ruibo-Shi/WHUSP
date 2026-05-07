@@ -2,7 +2,7 @@ use alloc::{format, string::String};
 
 const TEST_LIBCS: &[&str] = &["/glibc", "/musl"];
 
-const INTERACTIVE_SHELL: bool = false;
+const INTERACTIVE_SHELL: bool = true;
 
 const ALL_TESTS: &[&str] = &[
     "basic_testcode.sh",

@@ -89,10 +89,11 @@ pub fn trap_handler() -> ! {
             // window. If a syscall returns EINTR because a user handler became
             // deliverable, report the ecall PC in ucontext instead of the
             // already-advanced return PC.
-            // UNFINISHED: SA_RESTART is not modeled yet. Interrupted syscalls
-            // such as futex, wait4, nanosleep, clock_nanosleep, ppoll, and
+            // UNFINISHED: Full SA_RESTART is not modeled yet. Most interrupted
+            // syscalls such as futex, nanosleep, clock_nanosleep, ppoll, and
             // pselect6 currently return EINTR after rt_sigreturn instead of
-            // being automatically restarted.
+            // being automatically restarted; wait4/waitid only suppress EINTR
+            // for restartable handlers.
             interrupted_pc = if result == -(SysError::EINTR as isize) {
                 syscall_pc
             } else {

@@ -11,6 +11,7 @@ pub const SIGRTMIN: usize = 32;
 pub const SIGRT_1: usize = 33;
 pub const SIGRTMAX: usize = 64;
 pub const CLD_EXITED: i32 = 1;
+pub const SA_RESTART: usize = 0x1000_0000;
 pub const SS_ONSTACK: i32 = 1;
 pub const SS_DISABLE: i32 = 2;
 pub const MINSIGSTKSZ: usize = 2048;

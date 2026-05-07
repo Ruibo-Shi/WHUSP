@@ -1,7 +1,7 @@
 use super::super::mount::{
     mounted_root_for, mounted_root_parent, primary_mount_id, root_ino_for, with_mount,
 };
-use super::super::path::WorkingDir;
+use super::super::path::{PathContext, WorkingDir};
 use super::{FsError, FsNodeKind, FsResult, VfsNodeId};
 use alloc::string::String;
 use alloc::vec;
@@ -62,10 +62,10 @@ impl VfsPath {
 }
 
 impl VfsCursor {
-    fn root() -> Self {
-        let mount_id = primary_mount_id();
+    fn root(context: PathContext) -> Self {
+        let root = context.root();
         Self {
-            node: VfsNodeId::new(mount_id, root_ino_for(mount_id).unwrap_or(2)),
+            node: VfsNodeId::new(root.mount_id(), root.ino()),
             kind: FsNodeKind::Directory,
         }
     }
@@ -120,7 +120,7 @@ fn lookup_child_raw(cursor: VfsCursor, component: &str) -> FsResult<VfsCursor> {
 fn lookup_parent(cursor: VfsCursor) -> FsResult<VfsCursor> {
     if cursor.is_mount_root() {
         if cursor.node.mount_id == primary_mount_id() {
-            return Ok(VfsCursor::root());
+            return Ok(VfsCursor::root(PathContext::global_root()));
         }
         if let Some(parent) = mounted_root_parent(cursor.node.mount_id) {
             return Ok(VfsCursor {
@@ -132,18 +132,24 @@ fn lookup_parent(cursor: VfsCursor) -> FsResult<VfsCursor> {
         // reference checks, so a cwd can point at a detached mounted root. Linux
         // keeps such paths alive through mount references; we currently fall
         // back to `/` for that orphaned case.
-        return Ok(VfsCursor::root());
+        return Ok(VfsCursor::root(PathContext::global_root()));
     }
     lookup_child_raw(cursor, "..")
 }
 
-fn start_cursor(cwd: Option<WorkingDir>, path: &str) -> VfsCursor {
+fn lookup_parent_in_context(cursor: VfsCursor, context: PathContext) -> FsResult<VfsCursor> {
+    let root = context.root();
+    if cursor.node == VfsNodeId::new(root.mount_id(), root.ino()) {
+        return Ok(cursor);
+    }
+    lookup_parent(cursor)
+}
+
+fn start_cursor(context: PathContext, path: &str) -> VfsCursor {
     if path.starts_with('/') {
-        VfsCursor::root()
-    } else if let Some(cwd) = cwd {
-        VfsCursor::from_working_dir(cwd)
+        VfsCursor::root(context)
     } else {
-        VfsCursor::root()
+        VfsCursor::from_working_dir(context.cwd())
     }
 }
 
@@ -167,15 +173,11 @@ fn read_symlink_target(cursor: VfsCursor) -> FsResult<String> {
     Ok(String::from(target))
 }
 
-fn resolve_path_inner(
-    cwd: Option<WorkingDir>,
-    path: &str,
-    mode: LookupMode,
-) -> FsResult<VfsCursor> {
+fn resolve_path_inner(context: PathContext, path: &str, mode: LookupMode) -> FsResult<VfsCursor> {
     if path.is_empty() {
         return Err(FsError::NotFound);
     }
-    let mut cursor = start_cursor(cwd, path);
+    let mut cursor = start_cursor(context, path);
     let mut components = path_components(path);
     let mut index = 0usize;
     let mut symlink_follows = 0usize;
@@ -187,7 +189,7 @@ fn resolve_path_inner(
         let is_final = index + 1 == components.len();
         let component = components[index].as_str();
         if component == ".." {
-            cursor = lookup_parent(cursor)?;
+            cursor = lookup_parent_in_context(cursor, context)?;
         } else {
             let parent = cursor;
             cursor = lookup_child_raw(cursor, component)?;
@@ -203,7 +205,7 @@ fn resolve_path_inner(
                 components = next_components;
                 index = 0;
                 cursor = if target.starts_with('/') {
-                    VfsCursor::root()
+                    VfsCursor::root(context)
                 } else {
                     parent
                 };
@@ -246,33 +248,33 @@ fn parent_path_for_lookup<'a>(path: &str, parent_path: &'a str) -> &'a str {
     }
 }
 
-pub(crate) fn resolve_existing(
-    cwd: Option<WorkingDir>,
+pub(crate) fn resolve_existing_in(
+    context: PathContext,
     path: &str,
     mode: LookupMode,
 ) -> FsResult<VfsPath> {
-    let resolved = resolve_path_inner(cwd, path, mode)?.as_path();
+    let resolved = resolve_path_inner(context, path, mode)?.as_path();
     if path.ends_with('/') && resolved.kind != FsNodeKind::Directory {
         return Err(FsError::NotDir);
     }
     Ok(resolved)
 }
 
-pub(crate) fn resolve_mount_target(cwd: Option<WorkingDir>, path: &str) -> FsResult<VfsPath> {
-    resolve_existing(cwd, path, LookupMode::MountTarget)
+pub(crate) fn resolve_mount_target_in(context: PathContext, path: &str) -> FsResult<VfsPath> {
+    resolve_existing_in(context, path, LookupMode::MountTarget)
 }
 
-pub(crate) fn resolve_create_parent(
-    cwd: Option<WorkingDir>,
+pub(crate) fn resolve_create_parent_in(
+    context: PathContext,
     path: &str,
 ) -> FsResult<VfsCreateTarget<'_>> {
     let (parent_path, leaf_name) = split_parent_path(path)?;
     let parent_path = parent_path_for_lookup(path, parent_path);
     let parent = if parent_path.is_empty() {
-        let cursor = start_cursor(cwd, path);
+        let cursor = start_cursor(context, path);
         follow_mounted_root(cursor).as_path()
     } else {
-        resolve_existing(cwd, parent_path, LookupMode::FollowFinal)?
+        resolve_existing_in(context, parent_path, LookupMode::FollowFinal)?
     };
     if parent.kind != FsNodeKind::Directory {
         return Err(FsError::NotDir);
@@ -283,8 +285,8 @@ pub(crate) fn resolve_create_parent(
     })
 }
 
-pub(crate) fn resolve_open(
-    cwd: Option<WorkingDir>,
+pub(crate) fn resolve_open_in(
+    context: PathContext,
     path: &str,
     follow_final_symlink: bool,
     for_create: bool,
@@ -294,7 +296,7 @@ pub(crate) fn resolve_open(
     } else {
         LookupMode::NoFollowFinal
     };
-    match resolve_existing(cwd, path, mode) {
+    match resolve_existing_in(context, path, mode) {
         Ok(existing) => return Ok(VfsOpenTarget::Existing(existing)),
         Err(FsError::NotFound) if for_create => {}
         Err(err) => return Err(err),
@@ -303,5 +305,7 @@ pub(crate) fn resolve_open(
     if !for_create {
         return Err(FsError::NotFound);
     }
-    Ok(VfsOpenTarget::Create(resolve_create_parent(cwd, path)?))
+    Ok(VfsOpenTarget::Create(resolve_create_parent_in(
+        context, path,
+    )?))
 }

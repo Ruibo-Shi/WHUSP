@@ -1,11 +1,11 @@
-use crate::fs::{File, OpenFlags, open_file_at};
+use crate::fs::{File, OpenFlags, open_file_in};
 use crate::mm::{elf_required_interpreter_path, translated_refmut};
 use crate::sbi::shutdown;
 use crate::task::{
-    CloneArgs, CloneFlags, ProcessCpuTimesSnapshot, RLimit, RLimitResource, SignalFlags,
-    SignalInfo, add_task, clone_current_thread, current_process, current_task, current_user_token,
-    exit_current_and_run_next, exit_current_group_and_run_next, pid2process, processes_snapshot,
-    queue_signal_to_task, suspend_current_and_run_next, wakeup_task,
+    CAP_SETPCAP, CloneArgs, CloneFlags, ProcessCpuTimesSnapshot, RLimit, RLimitResource,
+    SignalFlags, SignalInfo, add_task, clone_current_thread, current_process, current_task,
+    current_user_token, exit_current_and_run_next, exit_current_group_and_run_next, pid2process,
+    processes_snapshot, queue_signal_to_task, suspend_current_and_run_next, wakeup_task,
 };
 use crate::timer::{get_time_clock_ticks, us_to_clock_ticks};
 use alloc::string::{String, ToString};
@@ -43,7 +43,6 @@ const LINUX_CAPABILITY_VERSION_2: u32 = 0x2007_1026;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const LINUX_CAPABILITY_U32S_1: usize = 1;
 const LINUX_CAPABILITY_U32S_2: usize = 2;
-const CAP_SETPCAP: usize = 8;
 const PR_CAPBSET_READ: usize = 23;
 const PR_CAPBSET_DROP: usize = 24;
 
@@ -1035,8 +1034,8 @@ fn busybox_fallback(
     interpreter: &ScriptInterpreter,
     script_path: &str,
 ) -> Option<(String, Vec<String>)> {
-    let cwd_path = current_process().working_dir_path();
-    let root = libc_test_root(cwd_path.as_str(), script_path)?;
+    let snapshot = current_process().path_snapshot();
+    let root = libc_test_root(snapshot.cwd_path.as_str(), script_path)?;
     let mut busybox_path = String::from(root);
     busybox_path.push_str("/busybox");
 
@@ -1074,8 +1073,11 @@ fn interpreter_candidates(
 }
 
 fn read_exec_file(path: &str) -> SysResult<Vec<u8>> {
-    let process = current_process();
-    let app_file = open_file_at(process.working_dir(), path, OpenFlags::RDONLY)?;
+    let app_file = open_file_in(
+        current_process().path_snapshot().context,
+        path,
+        OpenFlags::RDONLY,
+    )?;
     read_all_file(app_file)
 }
 

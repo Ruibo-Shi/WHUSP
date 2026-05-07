@@ -21,8 +21,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use lazy_static::*;
 use log::info;
 use manager::fetch_task;
+pub(crate) use process::{PathSnapshot, ProcessProcSnapshot, RLimit, RLimitResource};
 pub use process::{ProcessControlBlock, ProcessCpuTimesSnapshot};
-pub(crate) use process::{ProcessProcSnapshot, RLimit, RLimitResource};
+pub(crate) const CAP_SETPCAP: usize = process::CapabilitySets::CAP_SETPCAP;
+pub(crate) const CAP_SYS_CHROOT: usize = process::CapabilitySets::CAP_SYS_CHROOT;
 
 pub use crate::arch::TaskContext;
 pub use clone::{CloneArgs, CloneFlags, clone_current_thread};
@@ -38,8 +40,8 @@ pub use processor::{
     current_user_token, run_tasks, schedule, take_current_task,
 };
 pub use signal::{
-    CLD_EXITED, DefaultSignalAction, MINSIGSTKSZ, SIGCHLD, SIGKILL, SIGNAL_INFO_SLOTS, SIGSTOP,
-    SS_DISABLE, SS_ONSTACK, SigAltStack, SignalAction, SignalFlags, SignalInfo,
+    CLD_EXITED, DefaultSignalAction, MINSIGSTKSZ, SA_RESTART, SIGCHLD, SIGKILL, SIGNAL_INFO_SLOTS,
+    SIGSTOP, SS_DISABLE, SS_ONSTACK, SigAltStack, SignalAction, SignalFlags, SignalInfo,
     default_signal_action, default_signal_error,
 };
 pub(crate) use signal::{flags_to_linux_sigset, linux_sigset_to_flags};
@@ -403,7 +405,7 @@ pub fn check_signals_of_current() -> Option<(i32, &'static str)> {
     default_signal_error(signum)
 }
 
-pub fn current_has_deliverable_signal() -> bool {
+fn current_has_deliverable_signal_matching(predicate: impl Fn(SignalAction) -> bool) -> bool {
     let Some(task) = current_task() else {
         return false;
     };
@@ -427,12 +429,23 @@ pub fn current_has_deliverable_signal() -> bool {
         if action.is_ignore() || !action.has_user_handler() {
             continue;
         }
+        if !predicate(action) {
+            continue;
+        }
         if !crate::arch::signal::can_deliver_user_signal(signum) {
             continue;
         }
         return true;
     }
     false
+}
+
+pub fn current_has_deliverable_signal() -> bool {
+    current_has_deliverable_signal_matching(|_| true)
+}
+
+pub fn current_has_nonrestartable_signal() -> bool {
+    current_has_deliverable_signal_matching(|action| action.flags & SA_RESTART == 0)
 }
 
 pub fn current_add_signal(signal: SignalFlags) {

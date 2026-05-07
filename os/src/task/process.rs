@@ -4,7 +4,7 @@ use super::{
     TaskStatus,
 };
 use crate::config::USER_STACK_SIZE;
-use crate::fs::WorkingDir;
+use crate::fs::{PathContext, WorkingDir};
 use crate::mm::MemorySet;
 use crate::sync::{UPIntrFreeCell, UPIntrRefMut};
 use alloc::string::String;
@@ -135,6 +135,8 @@ pub struct CapabilitySets {
 }
 
 impl CapabilitySets {
+    pub const CAP_SETPCAP: usize = 8;
+    pub const CAP_SYS_CHROOT: usize = 18;
     pub const CAP_LAST_CAP: usize = 40;
 
     fn all_known_bits() -> [u32; 2] {
@@ -244,6 +246,13 @@ pub(crate) struct ProcessProcSnapshot {
     pub(crate) thread_count: usize,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PathSnapshot {
+    pub(crate) context: PathContext,
+    pub(crate) cwd_path: String,
+    pub(crate) root_path: String,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessCpuTimes {
     // UNFINISHED: CPU accounting is process-wide and trap-boundary based;
@@ -336,6 +345,8 @@ pub struct ProcessControlBlock {
 pub struct ProcessControlBlockInner {
     pub is_zombie: bool,
     pub memory_set: MemorySet,
+    pub root: WorkingDir,
+    pub root_path: String,
     pub cwd: WorkingDir,
     pub cwd_path: String,
     pub cmdline: Vec<String>,
@@ -414,12 +425,13 @@ impl ProcessControlBlock {
         self.inner.exclusive_access()
     }
 
-    pub fn working_dir(&self) -> WorkingDir {
-        self.inner.exclusive_access().cwd
-    }
-
-    pub fn working_dir_path(&self) -> String {
-        self.inner.exclusive_access().cwd_path.clone()
+    pub(crate) fn path_snapshot(&self) -> PathSnapshot {
+        let inner = self.inner.exclusive_access();
+        PathSnapshot {
+            context: PathContext::new(inner.root, inner.cwd),
+            cwd_path: inner.cwd_path.clone(),
+            root_path: inner.root_path.clone(),
+        }
     }
 
     pub fn set_working_dir(&self, cwd: WorkingDir, cwd_path: String) {
@@ -428,9 +440,16 @@ impl ProcessControlBlock {
         inner.cwd_path = cwd_path;
     }
 
+    pub fn set_root_dir(&self, root: WorkingDir, root_path: String) {
+        let mut inner = self.inner.exclusive_access();
+        inner.root = root;
+        inner.root_path = root_path;
+    }
+
     pub(crate) fn references_vfs_mount(&self, mount_id: crate::fs::MountId) -> bool {
         let inner = self.inner.exclusive_access();
-        inner.cwd.mount_id() == mount_id
+        inner.root.mount_id() == mount_id
+            || inner.cwd.mount_id() == mount_id
             || inner
                 .fd_table
                 .iter()

@@ -1,7 +1,7 @@
 use super::super::devfs;
 use super::super::inode::OpenFlags;
 use super::super::mount::{mount_supports_page_cache, release_inode_from_drop, with_mount};
-use super::super::path::WorkingDir;
+use super::super::path::{PathContext, WorkingDir};
 use super::super::status_flags::StatusFlagsCell;
 use super::super::{File, FileStat, FileTimestamp, SeekWhence};
 use super::path::{self as vfs_path, LookupMode, VfsOpenTarget};
@@ -108,13 +108,13 @@ impl VfsFile {
 }
 
 fn open_vfs_file_impl(
-    cwd: Option<WorkingDir>,
+    context: PathContext,
     name: &str,
     flags: OpenFlags,
 ) -> FsResult<Arc<VfsFile>> {
     let follow_final_symlink = !flags.contains(OpenFlags::NOFOLLOW);
-    let resolved = vfs_path::resolve_open(
-        cwd,
+    let resolved = vfs_path::resolve_open_in(
+        context,
         name,
         follow_final_symlink,
         flags.contains(OpenFlags::CREATE),
@@ -179,26 +179,30 @@ fn open_vfs_file_impl(
 }
 
 pub(crate) fn open_file(name: &str, flags: OpenFlags) -> FsResult<Arc<VfsFile>> {
-    open_vfs_file_impl(None, name, flags)
+    open_vfs_file_impl(PathContext::global_root(), name, flags)
 }
 
-pub(crate) fn open_file_at(
-    cwd: WorkingDir,
+pub(crate) fn open_file_in(
+    context: PathContext,
     name: &str,
     flags: OpenFlags,
 ) -> FsResult<Arc<dyn File + Send + Sync>> {
-    if let Some(file) = devfs::open(name, flags)? {
+    if context.is_global_root()
+        && let Some(file) = devfs::open(name, flags)?
+    {
         return Ok(file);
     }
-    open_vfs_file_impl(Some(cwd), name, flags).map(|file| file as Arc<dyn File + Send + Sync>)
+    open_vfs_file_impl(context, name, flags).map(|file| file as Arc<dyn File + Send + Sync>)
 }
 
-pub(crate) fn stat_at(
-    cwd: WorkingDir,
+pub(crate) fn stat_in(
+    context: PathContext,
     name: &str,
     follow_final_symlink: bool,
 ) -> FsResult<FileStat> {
-    if let Some(stat) = devfs::stat(name) {
+    if context.is_global_root()
+        && let Some(stat) = devfs::stat(name)
+    {
         return Ok(stat);
     }
     let mode = if follow_final_symlink {
@@ -206,15 +210,29 @@ pub(crate) fn stat_at(
     } else {
         LookupMode::NoFollowFinal
     };
-    let path = vfs_path::resolve_existing(Some(cwd), name, mode)?;
+    let path = vfs_path::resolve_existing_in(context, name, mode)?;
     let mut stat =
         with_mount(path.node.mount_id, |mount| mount.stat(path.node.ino)).ok_or(FsError::Io)??;
     stat.dev = path.node.mount_id.0 as u64;
     Ok(stat)
 }
 
-pub(crate) fn chmod_at(
-    cwd: WorkingDir,
+pub(crate) fn lookup_dir_with_stat_in(
+    context: PathContext,
+    name: &str,
+) -> FsResult<(WorkingDir, FileStat)> {
+    let path = vfs_path::resolve_existing_in(context, name, LookupMode::FollowFinal)?;
+    if path.kind != FsNodeKind::Directory {
+        return Err(FsError::NotDir);
+    }
+    let mut stat =
+        with_mount(path.node.mount_id, |mount| mount.stat(path.node.ino)).ok_or(FsError::Io)??;
+    stat.dev = path.node.mount_id.0 as u64;
+    Ok((WorkingDir::new(path.node.mount_id, path.node.ino), stat))
+}
+
+pub(crate) fn chmod_in(
+    context: PathContext,
     name: &str,
     follow_final_symlink: bool,
     mode: u32,
@@ -224,15 +242,15 @@ pub(crate) fn chmod_at(
     } else {
         LookupMode::NoFollowFinal
     };
-    let path = vfs_path::resolve_existing(Some(cwd), name, lookup_mode)?;
+    let path = vfs_path::resolve_existing_in(context, name, lookup_mode)?;
     with_mount(path.node.mount_id, |mount| {
         mount.set_mode(path.node.ino, mode)
     })
     .ok_or(FsError::Io)?
 }
 
-pub(crate) fn chown_at(
-    cwd: WorkingDir,
+pub(crate) fn chown_in(
+    context: PathContext,
     name: &str,
     follow_final_symlink: bool,
     uid: Option<u32>,
@@ -243,15 +261,15 @@ pub(crate) fn chown_at(
     } else {
         LookupMode::NoFollowFinal
     };
-    let path = vfs_path::resolve_existing(Some(cwd), name, lookup_mode)?;
+    let path = vfs_path::resolve_existing_in(context, name, lookup_mode)?;
     with_mount(path.node.mount_id, |mount| {
         mount.set_owner(path.node.ino, uid, gid)
     })
     .ok_or(FsError::Io)?
 }
 
-pub(crate) fn truncate_at(cwd: WorkingDir, name: &str, len: usize) -> FsResult {
-    let path = vfs_path::resolve_existing(Some(cwd), name, LookupMode::FollowFinal)?;
+pub(crate) fn truncate_in(context: PathContext, name: &str, len: usize) -> FsResult {
+    let path = vfs_path::resolve_existing_in(context, name, LookupMode::FollowFinal)?;
     if path.kind == FsNodeKind::Directory {
         return Err(FsError::IsDir);
     }
@@ -264,8 +282,8 @@ pub(crate) fn truncate_at(cwd: WorkingDir, name: &str, len: usize) -> FsResult {
     .ok_or(FsError::Io)?
 }
 
-pub(crate) fn lookup_dir_at(cwd: WorkingDir, name: &str) -> FsResult<WorkingDir> {
-    vfs_path::resolve_existing(Some(cwd), name, LookupMode::FollowFinal)?
+pub(crate) fn lookup_dir_in(context: PathContext, name: &str) -> FsResult<WorkingDir> {
+    vfs_path::resolve_existing_in(context, name, LookupMode::FollowFinal)?
         .working_dir()
         .ok_or(FsError::NotDir)
 }

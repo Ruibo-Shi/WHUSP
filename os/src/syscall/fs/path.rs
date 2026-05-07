@@ -1,6 +1,6 @@
 use super::super::errno::{SysError, SysResult};
 use super::fd::{get_fd_entry_by_fd, get_file_by_fd};
-use super::stat::resolve_stat;
+use super::stat::resolve_stat_from;
 use super::uapi::{
     AT_EACCESS, AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_OK, LinuxTimeSpec,
     RENAME_EXCHANGE, RENAME_NOREPLACE, RENAME_WHITEOUT, UTIME_NOW, UTIME_OMIT, VALID_ACCESS_MODE,
@@ -12,20 +12,23 @@ use super::user_ptr::{
     PATH_MAX, UserBufferAccess, copy_to_user, read_user_c_string, translated_byte_buffer_checked,
 };
 use crate::fs::{
-    File, FileStat, FileTimestamp, MountId, OpenFlags, S_IFDIR, S_IFREG, WorkingDir, link_file_at,
-    lookup_dir_at, mkdir_at, mount_is_read_only, normalize_path, open_devfs_child,
-    open_devfs_misc_child, open_file_at, open_static_path, rename_at, rmdir_at, symlink_at,
-    truncate_at, unlink_file_at,
+    File, FileStat, FileTimestamp, MountId, OpenFlags, PathContext, S_IFDIR, S_IFREG, WorkingDir,
+    link_file_in, lookup_dir_in, lookup_dir_with_stat_in, mkdir_in, mount_is_read_only,
+    normalize_path_at_root, open_devfs_child, open_devfs_misc_child, open_file_in,
+    open_static_path, path_inside_root, rename_in, rmdir_in, symlink_in, truncate_in,
+    unlink_file_in,
 };
 use crate::mm::UserBuffer;
-use crate::task::{FdTableEntry, current_process, current_user_token};
+use crate::task::{
+    CAP_SYS_CHROOT, FdTableEntry, PathSnapshot, current_process, current_user_token,
+};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 
-pub(super) fn dirfd_base(dirfd: isize) -> SysResult<WorkingDir> {
+fn dirfd_base_from(snapshot: &PathSnapshot, dirfd: isize) -> SysResult<WorkingDir> {
     if dirfd == AT_FDCWD {
-        return Ok(current_process().working_dir());
+        return Ok(snapshot.context.cwd());
     }
     if dirfd < 0 {
         return Err(SysError::EBADF);
@@ -34,12 +37,33 @@ pub(super) fn dirfd_base(dirfd: isize) -> SysResult<WorkingDir> {
     file.working_dir().ok_or(SysError::ENOTDIR)
 }
 
-fn path_base(dirfd: isize, path: &str) -> SysResult<WorkingDir> {
-    if path.starts_with('/') {
-        Ok(WorkingDir::root())
+pub(super) fn path_context_from(
+    snapshot: &PathSnapshot,
+    dirfd: isize,
+    path: &str,
+) -> SysResult<PathContext> {
+    let root = snapshot.context.root();
+    let cwd = if path.starts_with('/') {
+        root
     } else {
-        dirfd_base(dirfd)
-    }
+        dirfd_base_from(snapshot, dirfd)?
+    };
+    Ok(PathContext::new(root, cwd))
+}
+
+fn process_global_path_for(snapshot: &PathSnapshot, path: &str) -> Option<String> {
+    normalize_path_at_root(
+        snapshot.root_path.as_str(),
+        snapshot.cwd_path.as_str(),
+        path,
+    )
+}
+
+fn visible_working_dir_path(snapshot: &PathSnapshot) -> SysResult<String> {
+    Ok(
+        path_inside_root(snapshot.root_path.as_str(), snapshot.cwd_path.as_str())
+            .unwrap_or_else(|| alloc::format!("(unreachable){}", snapshot.cwd_path)),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -93,7 +117,8 @@ fn check_access_mode(stat: &FileStat, mode: i32, subject: AccessSubject<'_>) -> 
     Ok(())
 }
 
-fn check_access_path_prefixes(
+fn check_access_path_prefixes_from(
+    snapshot: &PathSnapshot,
     dirfd: isize,
     path: &str,
     subject: AccessSubject<'_>,
@@ -122,7 +147,7 @@ fn check_access_path_prefixes(
         }
         prefix.push_str(component);
 
-        let stat = resolve_stat(dirfd, prefix.as_str(), true)?;
+        let stat = resolve_stat_from(snapshot, dirfd, prefix.as_str(), true)?;
         if stat.mode & S_IFDIR != S_IFDIR {
             return Err(SysError::ENOTDIR);
         }
@@ -219,12 +244,12 @@ fn readlink_file_to_user(
     Ok(copy_len as isize)
 }
 
-fn openat_dir_path(dirfd: isize, path: &str) -> SysResult<Option<String>> {
+fn openat_dir_path(snapshot: &PathSnapshot, dirfd: isize, path: &str) -> SysResult<Option<String>> {
     if path.starts_with('/') {
-        return Ok(normalize_path("/", path));
+        return Ok(process_global_path_for(snapshot, path));
     }
     if dirfd == AT_FDCWD {
-        return Ok(normalize_path(&current_process().working_dir_path(), path));
+        return Ok(process_global_path_for(snapshot, path));
     }
     if dirfd < 0 {
         return Err(SysError::EBADF);
@@ -236,7 +261,7 @@ fn openat_dir_path(dirfd: isize, path: &str) -> SysResult<Option<String>> {
     }
     Ok(entry
         .dir_path()
-        .and_then(|base_path| normalize_path(base_path, path)))
+        .and_then(|base_path| normalize_path_at_root(snapshot.root_path.as_str(), base_path, path)))
 }
 
 fn install_open_file(
@@ -281,17 +306,19 @@ pub fn sys_openat(dirfd: isize, path: *const u8, flags: u32, _mode: u32) -> SysR
     if flags.bits() & 0b11 == 0b11 {
         return Err(SysError::EINVAL);
     }
+    let snapshot = current_process().path_snapshot();
     if let Some(file) = open_devfs_child_from_dirfd(dirfd, path.as_str(), flags)? {
         return install_open_file(file, flags, None);
     }
-    let dir_path = openat_dir_path(dirfd, path.as_str())?;
+    let dir_path = openat_dir_path(&snapshot, dirfd, path.as_str())?;
     if let Some(path) = dir_path.as_deref()
+        && snapshot.context.is_global_root()
         && let Some(file) = open_static_path(path, flags)?
     {
         return install_open_file(file, flags, None);
     }
-    let base = path_base(dirfd, path.as_str())?;
-    let file = open_file_at(base, path.as_str(), flags)?;
+    let context = path_context_from(&snapshot, dirfd, path.as_str())?;
+    let file = open_file_in(context, path.as_str(), flags)?;
     install_open_file(file, flags, dir_path)
 }
 
@@ -312,12 +339,16 @@ pub fn sys_truncate(path: *const u8, len: usize) -> SysResult {
         gid: credentials.fsgid,
         groups: &credentials.groups,
     };
-    check_access_path_prefixes(AT_FDCWD, path.as_str(), subject)?;
-    let stat = resolve_stat(AT_FDCWD, path.as_str(), true)?;
+    let snapshot = current_process().path_snapshot();
+    check_access_path_prefixes_from(&snapshot, AT_FDCWD, path.as_str(), subject)?;
+    let stat = resolve_stat_from(&snapshot, AT_FDCWD, path.as_str(), true)?;
     check_access_mode(&stat, W_OK, subject)?;
 
-    let base = path_base(AT_FDCWD, path.as_str())?;
-    truncate_at(base, path.as_str(), len)?;
+    truncate_in(
+        path_context_from(&snapshot, AT_FDCWD, path.as_str())?,
+        path.as_str(),
+        len,
+    )?;
     Ok(0)
 }
 
@@ -354,8 +385,9 @@ fn do_faccessat(
         }
     };
     let follow_final_symlink = flags & AT_SYMLINK_NOFOLLOW == 0;
-    check_access_path_prefixes(dirfd, path.as_str(), subject)?;
-    let stat = resolve_stat(dirfd, path.as_str(), follow_final_symlink)?;
+    let snapshot = current_process().path_snapshot();
+    check_access_path_prefixes_from(&snapshot, dirfd, path.as_str(), subject)?;
+    let stat = resolve_stat_from(&snapshot, dirfd, path.as_str(), follow_final_symlink)?;
     check_access_mode(&stat, mode, subject)?;
     Ok(0)
 }
@@ -404,12 +436,13 @@ pub fn sys_utimensat(
 
     let token = current_user_token();
     let path = read_user_c_string(token, pathname, PATH_MAX)?;
+    let snapshot = current_process().path_snapshot();
     if path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
             return Err(SysError::ENOENT);
         }
         if dirfd == AT_FDCWD {
-            let file = open_file_at(current_process().working_dir(), ".", OpenFlags::PATH)?;
+            let file = open_file_in(snapshot.context, ".", OpenFlags::PATH)?;
             return apply_utimensat_to_file(file, atime, mtime, now);
         }
         if dirfd < 0 {
@@ -428,8 +461,11 @@ pub fn sys_utimensat(
     if let Some(file) = open_devfs_child_from_dirfd(dirfd, path.as_str(), open_flags)? {
         return apply_utimensat_to_file(file, atime, mtime, now);
     }
-    let base = path_base(dirfd, path.as_str())?;
-    let file = open_file_at(base, path.as_str(), open_flags)?;
+    let file = open_file_in(
+        path_context_from(&snapshot, dirfd, path.as_str())?,
+        path.as_str(),
+        open_flags,
+    )?;
     apply_utimensat_to_file(file, atime, mtime, now)
 }
 
@@ -437,12 +473,49 @@ pub fn sys_chdir(path: *const u8) -> SysResult {
     let process = current_process();
     let token = current_user_token();
     let path = read_user_c_string(token, path, PATH_MAX)?;
-    let cwd = process.working_dir();
-    let next_cwd = lookup_dir_at(cwd, path.as_str())?;
-    let Some(next_path) = normalize_path(&process.working_dir_path(), path.as_str()) else {
+    let snapshot = process.path_snapshot();
+    let next_cwd = lookup_dir_in(snapshot.context, path.as_str())?;
+    let Some(next_path) = process_global_path_for(&snapshot, path.as_str()) else {
         return Err(SysError::ENOENT);
     };
     process.set_working_dir(next_cwd, next_path);
+    Ok(0)
+}
+
+pub fn sys_chroot(path: *const u8) -> SysResult {
+    let process = current_process();
+    let token = current_user_token();
+    let path = read_user_c_string(token, path, PATH_MAX)?;
+    if path.is_empty() {
+        return Err(SysError::ENOENT);
+    }
+
+    let credentials = process.credentials();
+    let subject = AccessSubject {
+        uid: credentials.fsuid,
+        gid: credentials.fsgid,
+        groups: &credentials.groups,
+    };
+    let snapshot = process.path_snapshot();
+    check_access_path_prefixes_from(&snapshot, AT_FDCWD, path.as_str(), subject)?;
+    let (next_root, stat) = lookup_dir_with_stat_in(snapshot.context, path.as_str())?;
+    check_access_mode(&stat, X_OK, subject)?;
+    if credentials.euid != 0
+        || !credentials
+            .capabilities
+            .has_effective(CAP_SYS_CHROOT)
+            .unwrap_or(false)
+    {
+        // UNFINISHED: Linux checks CAP_SYS_CHROOT in the caller's user
+        // namespace. This kernel's capability model is process-wide and does
+        // not recalculate capabilities across uid transitions yet, so require
+        // both euid 0 and the stored capability bit.
+        return Err(SysError::EPERM);
+    }
+    let Some(next_path) = process_global_path_for(&snapshot, path.as_str()) else {
+        return Err(SysError::ENOENT);
+    };
+    process.set_root_dir(next_root, next_path);
     Ok(0)
 }
 
@@ -471,16 +544,20 @@ pub fn sys_fchdir(fd: usize) -> SysResult {
 }
 
 pub fn sys_getcwd(buf: *mut u8, size: usize) -> SysResult {
-    let process = current_process();
-    let cwd_path = process.working_dir_path();
+    let snapshot = current_process().path_snapshot();
+    let cwd_path = visible_working_dir_path(&snapshot)?;
     copy_c_string_to_user(buf, size, cwd_path.as_str())
 }
 
 pub fn sys_mkdirat(dirfd: isize, path: *const u8, mode: u32) -> SysResult {
     let token = current_user_token();
     let path = read_user_c_string(token, path, PATH_MAX)?;
-    let base = path_base(dirfd, path.as_str())?;
-    mkdir_at(base, path.as_str(), mode)?;
+    let snapshot = current_process().path_snapshot();
+    mkdir_in(
+        path_context_from(&snapshot, dirfd, path.as_str())?,
+        path.as_str(),
+        mode,
+    )?;
     Ok(0)
 }
 
@@ -490,11 +567,17 @@ pub fn sys_unlinkat(dirfd: isize, path: *const u8, flags: u32) -> SysResult {
     }
     let token = current_user_token();
     let path = read_user_c_string(token, path, PATH_MAX)?;
-    let base = path_base(dirfd, path.as_str())?;
+    let snapshot = current_process().path_snapshot();
     if flags & AT_REMOVEDIR != 0 {
-        rmdir_at(base, path.as_str())?;
+        rmdir_in(
+            path_context_from(&snapshot, dirfd, path.as_str())?,
+            path.as_str(),
+        )?;
     } else {
-        unlink_file_at(base, path.as_str())?;
+        unlink_file_in(
+            path_context_from(&snapshot, dirfd, path.as_str())?,
+            path.as_str(),
+        )?;
     }
     Ok(0)
 }
@@ -514,9 +597,13 @@ pub fn sys_linkat(
     let token = current_user_token();
     let oldpath = read_user_c_string(token, oldpath, PATH_MAX)?;
     let newpath = read_user_c_string(token, newpath, PATH_MAX)?;
-    let old_base = path_base(olddirfd, oldpath.as_str())?;
-    let new_base = path_base(newdirfd, newpath.as_str())?;
-    link_file_at(old_base, oldpath.as_str(), new_base, newpath.as_str())?;
+    let snapshot = current_process().path_snapshot();
+    link_file_in(
+        path_context_from(&snapshot, olddirfd, oldpath.as_str())?,
+        oldpath.as_str(),
+        path_context_from(&snapshot, newdirfd, newpath.as_str())?,
+        newpath.as_str(),
+    )?;
     Ok(0)
 }
 
@@ -527,8 +614,12 @@ pub fn sys_symlinkat(target: *const u8, newdirfd: isize, linkpath: *const u8) ->
     if target.is_empty() || linkpath.is_empty() {
         return Err(SysError::ENOENT);
     }
-    let base = path_base(newdirfd, linkpath.as_str())?;
-    symlink_at(base, target.as_str(), linkpath.as_str())?;
+    let snapshot = current_process().path_snapshot();
+    symlink_in(
+        path_context_from(&snapshot, newdirfd, linkpath.as_str())?,
+        target.as_str(),
+        linkpath.as_str(),
+    )?;
     Ok(0)
 }
 
@@ -539,6 +630,7 @@ pub fn sys_readlinkat(dirfd: isize, path: *const u8, buf: *mut u8, bufsiz: usize
 
     let token = current_user_token();
     let path = read_user_c_string(token, path, PATH_MAX)?;
+    let snapshot = current_process().path_snapshot();
     let file = if path.is_empty() {
         if dirfd == AT_FDCWD {
             return Err(SysError::ENOENT);
@@ -548,8 +640,11 @@ pub fn sys_readlinkat(dirfd: isize, path: *const u8, buf: *mut u8, bufsiz: usize
         }
         get_file_by_fd(dirfd as usize)?
     } else {
-        let base = path_base(dirfd, path.as_str())?;
-        open_file_at(base, path.as_str(), OpenFlags::PATH | OpenFlags::NOFOLLOW)?
+        open_file_in(
+            path_context_from(&snapshot, dirfd, path.as_str())?,
+            path.as_str(),
+            OpenFlags::PATH | OpenFlags::NOFOLLOW,
+        )?
     };
     readlink_file_to_user(file, buf, bufsiz)
 }
@@ -578,12 +673,11 @@ pub fn sys_renameat2(
     let token = current_user_token();
     let oldpath = read_user_c_string(token, oldpath, PATH_MAX)?;
     let newpath = read_user_c_string(token, newpath, PATH_MAX)?;
-    let old_base = path_base(olddirfd, oldpath.as_str())?;
-    let new_base = path_base(newdirfd, newpath.as_str())?;
-    rename_at(
-        old_base,
+    let snapshot = current_process().path_snapshot();
+    rename_in(
+        path_context_from(&snapshot, olddirfd, oldpath.as_str())?,
         oldpath.as_str(),
-        new_base,
+        path_context_from(&snapshot, newdirfd, newpath.as_str())?,
         newpath.as_str(),
         flags & RENAME_NOREPLACE != 0,
     )?;
