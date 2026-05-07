@@ -9,7 +9,7 @@ use crate::timer::get_time_ms;
 use alloc::sync::Arc;
 
 use super::errno::{SysError, SysResult};
-use super::sync::relative_timeout_deadline_ms;
+use super::time::relative_timeout_deadline_ms;
 use super::uapi::LinuxTimeSpec;
 use super::user_ptr::{read_user_value, write_user_value};
 use super::wait::LinuxSigInfo;

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use super::super::errno::{SysError, SysResult};
-use super::super::sync::relative_timeout_deadline_ms;
+use super::super::time::relative_timeout_deadline_ms;
 use super::super::uapi::LinuxTimeSpec;
 use super::super::user_ptr::{read_user_value, write_user_value};
 use super::fd::get_file_by_fd;
