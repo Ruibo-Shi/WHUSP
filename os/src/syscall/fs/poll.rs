@@ -8,9 +8,10 @@ use core::mem::size_of;
 
 use super::super::errno::{SysError, SysResult};
 use super::super::sync::relative_timeout_deadline_ms;
+use super::super::uapi::LinuxTimeSpec;
+use super::super::user_ptr::{read_user_value, write_user_value};
 use super::fd::get_file_by_fd;
-use super::uapi::{LinuxPollFd, LinuxTimeSpec, PPOLL_MAX_NFDS};
-use super::user_ptr::{read_user_value, write_user_value};
+use super::uapi::{LinuxPollFd, PPOLL_MAX_NFDS};
 
 const SELECT_MAX_NFDS: usize = 1024;
 const FD_SET_WORD_BITS: usize = usize::BITS as usize;

@@ -8,8 +8,8 @@ use crate::timer::{
 };
 
 use super::errno::{SysError, SysResult};
-use super::fs::LinuxTimeSpec;
-use super::fs::user_ptr::{read_user_value, write_user_value};
+use super::uapi::LinuxTimeSpec;
+use super::user_ptr::{read_user_value, write_user_value};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec::Vec;

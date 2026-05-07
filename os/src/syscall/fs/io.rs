@@ -5,12 +5,12 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use super::super::errno::{SysError, SysResult};
-use super::fd::{get_fd_entry_by_fd, get_file_by_fd};
-use super::uapi::{IOV_MAX, LinuxIovec};
-use super::user_ptr::{
+use super::super::user_ptr::{
     UserBufferAccess, read_user_usize, translated_byte_buffer_checked,
     translated_byte_buffer_checked_with_mmap_fault,
 };
+use super::fd::{get_fd_entry_by_fd, get_file_by_fd};
+use super::uapi::{IOV_MAX, LinuxIovec};
 
 fn read_user_iovecs(
     token: usize,

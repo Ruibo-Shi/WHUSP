@@ -134,6 +134,8 @@ mod net;
 mod process;
 mod signal;
 mod sync;
+mod uapi;
+pub(crate) mod user_ptr;
 mod wait;
 
 use crate::task::RLimit;
@@ -144,11 +146,11 @@ use net::*;
 use process::*;
 use signal::*;
 use sync::*;
+use uapi::LinuxTimeSpec;
 use wait::*;
 
-#[cfg(any(target_arch = "riscv64", target_arch = "loongarch64"))]
-pub(crate) use fs::user_ptr;
 pub(crate) use sync::exit_robust_list;
+#[cfg(any(target_arch = "riscv64", target_arch = "loongarch64"))]
 pub(crate) use sync::{clear_child_tid_and_wake, remove_process_futex_waiters};
 #[cfg(any(target_arch = "riscv64", target_arch = "loongarch64"))]
 pub(crate) use wait::LinuxSigInfo;

@@ -6,7 +6,7 @@
 //! is not involved.
 
 use super::errno::{SysError, SysResult};
-use super::fs::user_ptr::{
+use super::user_ptr::{
     UserBufferAccess, copy_to_user, read_user_value, translated_byte_buffer_checked,
     write_user_value,
 };

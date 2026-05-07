@@ -3,8 +3,8 @@ use crate::task::current_user_token;
 use lazy_static::lazy_static;
 
 use super::super::errno::{SysError, SysResult};
+use super::super::user_ptr::{read_user_value, write_user_value};
 use super::fd::get_file_by_fd;
-use super::user_ptr::{read_user_value, write_user_value};
 
 const TCGETS: usize = 0x5401;
 const TCSETS: usize = 0x5402;

@@ -5,7 +5,7 @@ use crate::fs::{
 use crate::task::{current_process, current_user_token};
 
 use super::super::errno::{SysError, SysResult};
-use super::user_ptr::{PATH_MAX, read_user_c_string};
+use super::super::user_ptr::{PATH_MAX, read_user_c_string};
 
 const MS_RDONLY: usize = 1;
 const MS_REMOUNT: usize = 32;

@@ -5,13 +5,13 @@ use crate::fs::{
 use crate::task::{PathSnapshot, current_process, current_user_token};
 
 use super::super::errno::{SysError, SysResult};
+use super::super::user_ptr::{PATH_MAX, read_user_c_string, write_user_value};
 use super::fd::get_file_by_fd;
 use super::path::path_context_from;
 use super::uapi::{
     AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW, LinuxKstat, LinuxStatfs, LinuxStatx,
     STATX_RESERVED, VALID_FCHOWNAT_FLAGS, VALID_FSTATAT_FLAGS, VALID_STATX_FLAGS,
 };
-use super::user_ptr::{PATH_MAX, read_user_c_string, write_user_value};
 
 const UID_GID_NO_CHANGE: u32 = u32::MAX;
 

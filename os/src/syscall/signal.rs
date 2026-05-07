@@ -9,9 +9,9 @@ use crate::timer::get_time_ms;
 use alloc::sync::Arc;
 
 use super::errno::{SysError, SysResult};
-use super::fs::LinuxTimeSpec;
-use super::fs::user_ptr::{read_user_value, write_user_value};
 use super::sync::relative_timeout_deadline_ms;
+use super::uapi::LinuxTimeSpec;
+use super::user_ptr::{read_user_value, write_user_value};
 use super::wait::LinuxSigInfo;
 
 const LINUX_RT_SIGSET_SIZE: usize = 8;

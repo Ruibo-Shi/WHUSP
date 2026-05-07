@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use core::str;
 
 use super::errno::{SysError, SysResult};
-use super::fs::user_ptr::{
+use super::user_ptr::{
     PATH_MAX, copy_to_user, read_user_c_string, read_user_usize, read_user_value, write_user_value,
 };
 

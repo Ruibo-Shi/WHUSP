@@ -6,7 +6,6 @@ mod poll;
 mod stat;
 mod tty;
 mod uapi;
-pub(crate) mod user_ptr;
 
 pub use fd::{sys_close, sys_dup, sys_dup3, sys_fcntl, sys_pipe2};
 pub use io::{
@@ -22,4 +21,4 @@ pub use path::{
 pub use poll::{sys_ppoll, sys_pselect6};
 pub use stat::{sys_fchmodat, sys_fchownat, sys_fstat, sys_newfstatat, sys_statfs, sys_statx};
 pub use tty::sys_ioctl;
-pub use uapi::{LinuxIovec, LinuxKstat, LinuxPollFd, LinuxStatfs, LinuxStatx, LinuxTimeSpec};
+pub use uapi::{LinuxIovec, LinuxKstat, LinuxPollFd, LinuxStatfs, LinuxStatx};

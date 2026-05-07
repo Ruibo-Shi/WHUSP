@@ -70,13 +70,6 @@ pub struct LinuxPollFd {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct LinuxTimeSpec {
-    pub(in crate::syscall) tv_sec: isize,
-    pub(in crate::syscall) tv_nsec: isize,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
 pub struct LinuxKstat {
     st_dev: u64,
     st_ino: u64,

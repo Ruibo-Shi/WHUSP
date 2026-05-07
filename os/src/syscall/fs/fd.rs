@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use core::mem::size_of;
 
 use super::super::errno::{SysError, SysResult};
-use super::user_ptr::{
+use super::super::user_ptr::{
     UserBufferAccess, read_user_value, translated_byte_buffer_checked, write_user_value,
 };
 

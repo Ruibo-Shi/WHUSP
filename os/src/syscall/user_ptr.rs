@@ -3,7 +3,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::mem::{MaybeUninit, size_of};
 
-use super::super::errno::{SysError, SysResult};
+use super::errno::{SysError, SysResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UserBufferAccess {
